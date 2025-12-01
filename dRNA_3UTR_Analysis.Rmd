@@ -1,0 +1,2991 @@
+---
+title: "dRNA_3UTR_Analysis"
+author: "George Boateng-Sarfo"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r}
+#install.packages("devtools")
+#BiocManager::install(c("DEXSeq", "bambu", "GenomicFeatures", "Rsamtools", "GenomicAlignments", "Biostrings"))
+#devtools::install_github("markandtwin/APALORD",build_vignettes = TRUE)
+```
+
+
+```{r}
+library(APALORD)
+
+#browseVignettes(package = "APALORD")
+```
+
+
+```{r}
+#gtf_file <- paste0("~/Dropbox/all_files/dm6_new.gtf")
+gene_reference <- load_gtf("~/Dropbox/all_files/dm6_new.gtf", cores = 5)
+```
+
+Mettl3-KO vs w1118
+ 
+ 
+```{r}
+
+w1118_sample <- c(
+  file.path("/media/george/Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs", "w1118_induro", "rep1"),
+  file.path("/media/george/Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs", "w1118_induro", "rep2"))
+  
+FR113N_sample <- c(
+  file.path("/media/george/Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs", "FR113N_induro", "rep1"),
+  file.path("/media/george/Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs", "FR113N_induro", "rep2"))
+
+Mettl3_sample <- c(
+  file.path("/media/george/Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs", "Mettl3_KO", "rep1"),
+  file.path("/media/george/Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs", "Mettl3_KO", "rep2"))
+
+# sanity check before loading
+#required <- c("OUT.read_assignments.tsv","OUT.corrected_reads.bed")
+#ok <- vapply(c(w1118_sample, FR113N_sample, Mettl3_sample),
+#             function(d) all(file.exists(file.path(d, required))),
+#             logical(1))
+#if (!all(ok)) {
+#  stop("Missing required files in:\n", paste0(" - ", c(w1118_sample, FR113N_sample, Mettl3_sample)[!ok], collapse = "\n"))
+#}
+
+# group labels as you like (tutorial used D0/D7)
+Mettl3_w118_reads <- load_samples(w1118_sample, Mettl3_sample, group1 = "w1118", group2 = "Mettl3-KO")
+
+Mettl3_FR113_reads <- load_samples(FR113N_sample, Mettl3_sample, group1 = "FR113N", group2 = "Mettl3-KO")
+
+
+FR113_w1118reads <- load_samples(FR113N_sample, w1118_sample, group1 = "FR113N", group2 = "w1118")
+```
+
+
+
+```{r}
+library(GenomeInfoDb)
+library(GenomicRanges)
+library(SummarizedExperiment)
+library(S4Vectors)
+library(BiocGenerics)
+library(BiocParallel)
+register(SerialParam())
+# ---- paths ----
+gtf_file <- "~/Dropbox/all_files/dm6_new.gtf"
+genome_file <- "~/Dropbox/all_files/new_peak_files_java/all_macs2_call_diff_star_mapped/dm6.fasta"
+
+
+grp_w1118 <- file.path("/media/george/Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs/w1118_induro")
+grp_FR113N <- file.path("/media/george/Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs/FR113N_induro")
+grp_Mettl3 <- file.path("/media/george/Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs/Mettl3_KO")
+
+# helper: list BAMs inside rep subdirs
+list_bams <- function(group_dir) {
+  reps <- file.path(group_dir, c("rep1","rep2"))
+  bam_files <- unlist(lapply(reps, function(d)
+    list.files(d, pattern = "\\.bam$", full.names = TRUE, ignore.case = TRUE)))
+  sort(bam_files)
+}
+
+
+w1118_bams  <- list_bams(grp_w1118)
+FR113N_bams <- list_bams(grp_FR113N)
+Mettl3_bams <- list_bams(grp_Mettl3)
+
+
+# sanity check
+stopifnot(length(w1118_bams)  > 0,
+          length(Mettl3_bams) > 0)
+
+if (!requireNamespace("Rsamtools", quietly = TRUE))
+  BiocManager::install("Rsamtools")
+
+# BAM indexes (.bai)
+for (bf in c(w1118_bams, FR113N_bams, Mettl3_bams)) {
+  bai <- paste0(bf, ".bai")
+  if (!file.exists(bai)) Rsamtools::indexBam(bf)
+}
+
+# FASTA index (.fai)
+if (!file.exists(paste0(genome_file, ".fai"))) {
+  Rsamtools::indexFa(genome_file)
+}
+
+# shim: let rowData() work on GRanges by returning mcols()
+if (!isGeneric("rowData")) {
+  setGeneric("rowData", function(x, ...) standardGeneric("rowData"))
+}
+setMethod("rowData", "GRanges", function(x, ...) mcols(x))
+
+# Example: w1118 vs Mettl3_KO
+Mettl3_w1118_reads <- load_from_bam(infile1 = w1118_bams, infile2 = Mettl3_bams, group1 = "w1118", group2 = "Mettl3_KO", gtf_file = gtf_file, genome_file = genome_file, cores = 5)
+
+# If you also want FR113N vs w1118:
+Mettl3_KO_FR113N_reads <- load_from_bam(infile1 = FR113N_bams, infile2 = Mettl3_bams, group1 = "FR113N", group2  = "Mettl3_KO", gtf_file = gtf_file, genome_file = genome_file, cores = 5)
+
+```
+
+PAS Calling: This PAS calling output file is in .bed format, so users can load it into IGV or UCSC genome browser to check it. It's not required by the downstream analysis, so this step is optional.
+```{r}
+# PAS calling
+# - Identify PASs from reads data
+# - Use direct_RNA=TRUE for direct RNA-seq
+
+Mettl3_FR113_PAS_data <- PAS_calling(gene_reference, Mettl3_FR113_reads, cores = 5, direct_RNA = TRUE)
+
+Mettl3_w1118_PAS_data <- PAS_calling(gene_reference, Mettl3_w118_reads, cores = 5, direct_RNA = TRUE)
+
+FR113_w1118_PAS_data <- PAS_calling(gene_reference, FR113_w1118reads, cores = 5, direct_RNA = TRUE)
+
+#write.table(Mettl3_FR113_PAS_data, file = "/media/george//Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs/dRNA_3UTR_Mettl3_FR113_PAS_data.txt", quote = FALSE, col.names = T, row.names = FALSE, sep = "\t")
+
+#write.table(Mettl3_w1118_PAS_data, file = "/media/george//Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs/dRNA_3UTR_Mettl3_w1118_PAS_data.txt", quote = FALSE, col.names = T, row.names = FALSE, sep = "\t")
+
+#write.table(FR113_w1118_PAS_data, file = "/media/george//Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs/dRNA_3UTR_FR113_w1118_PAS_data.txt", quote = FALSE, col.names = T, row.names = FALSE, sep = "\t")
+```
+
+
+PAU Quantification: The PAU_test function performs statistical testing to identify significant changes in PAU between conditions. it uses differential exon usuage to deterenine the difference in PAU between conditions.
+```{r}
+# PAU quantification
+# - Quantify polyadenylation usage per sample
+Mettl3_w118_PAU <- PAU_by_sample(gene_reference, Mettl3_w118_reads, cores = 5, direct_RNA = TRUE)
+Mettl3_w118_PAU_test_data <- PAU_test(Mettl3_w118_PAU, Mettl3_w118_reads, P_cutoff = 0.05)
+
+Mettl3_FR113_PAU <- PAU_by_sample(gene_reference, Mettl3_FR113_reads, cores = 5, direct_RNA = TRUE)
+Mettl3_FR113_PAU_test_data <- PAU_test(Mettl3_FR113_PAU, Mettl3_FR113_reads, P_cutoff = 0.05)
+
+
+FR113_w1118_PAU <- PAU_by_sample(gene_reference, FR113_w1118reads, cores = 5, direct_RNA = TRUE)
+FR113_w1118_PAU_test_data <- PAU_test(FR113_w1118_PAU, FR113_w1118reads, P_cutoff = 0.05)
+
+#write.table(Mettl3_w118_PAU, file = "/media/george//Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs/dRNA_3UTR_Mettl3_w118_PAU.txt", quote = FALSE, col.names = TRUE, row.names = FALSE, sep = "\t")
+
+#write.table(Mettl3_w118_PAU_test_data, file = "/media/george//Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs/dRNA_3UTR_Mettl3_w118_PAU_test.txt", quote = FALSE, col.names = TRUE, row.names = FALSE, sep = "\t")
+
+
+#write.table(Mettl3_FR113_PAU, file = "/media/george//Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs/dRNA_3UTR_Mettl3_FR113_PAU.txt", quote = FALSE, col.names = TRUE, row.names = FALSE, sep = "\t")
+
+#write.table(Mettl3_FR113_PAU_test_data, file = "/media/george//Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs/dRNA_3UTR_Mettl3_FR113_PAU_test.txt", quote = FALSE, col.names = TRUE, row.names = FALSE, sep = "\t")
+
+#write.table(FR113_w1118_PAU, file = "/media/george//Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs/dRNA_3UTR_FR113_w1118_PAU.txt", quote = FALSE, col.names = TRUE, row.names = FALSE, sep = "\t")
+#write.table(FR113_w1118_PAU_test_data, file = "/media/george//Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs/dRNA_3UTR_FR113_w1118_PAU_test.txt", quote = FALSE, col.names = TRUE, row.names = FALSE, sep = "\t")
+
+```
+
+```{r, message=FALSE}
+library(duckplyr)
+library(ggplot2)
+#library(dplyr)
+library(ggvenn)
+library(rtracklayer)
+library(ggpubr)
+library(ggridges)
+library(dplyr)
+library(plotly)
+library(GenomicFeatures)
+library(GenomicRanges)
+#library(ChIPseeker)
+library(Guitar)
+#library(ChIPpeakAnno)
+#library(tidyverse)
+library(data.table)
+library(tools)
+library(tidyr)
+library(ggrepel)
+```
+
+Fig3: Volcano plots for APA changes between conditions
+```{r, warning=FALSE, message=TRUE}
+dRNA_3UTR_FR113_w1118_PAU_test = read.delim("~/Dropbox/all_files/dRNA/dRNA_3UTR/dRNA_3UTR_FR113_w118_APA_data_profile.txt", header = T, sep = "\t", check.names = F)
+
+P_cutoff <- 0.05
+delta <- 0.10
+
+# If padj not already present, calculate it from pvalue (FDR, like APA_plot)
+if (!"padj" %in% colnames(dRNA_3UTR_FR113_w1118_PAU_test)) {
+  dRNA_3UTR_FR113_w1118_PAU_test$padj <- p.adjust(dRNA_3UTR_FR113_w1118_PAU_test$pvalue, method = "fdr")
+}
+
+# Label top genes by smallest padj
+dRNA_3UTR_FR113_w1118_PAU_test$label <- ifelse(
+  dRNA_3UTR_FR113_w1118_PAU_test$gene_name %in% 
+    head(dRNA_3UTR_FR113_w1118_PAU_test[order(dRNA_3UTR_FR113_w1118_PAU_test$padj), "gene_name"], 500),
+  dRNA_3UTR_FR113_w1118_PAU_test$gene_name,
+  NA)
+
+# --- Classify APA trend using SAME logic as APA_plot ---
+dRNA_3UTR_FR113_w1118_PAU_test$diffexpressed <- "No change"
+
+# Lengthened (longer 3'UTR): padj < 0.05 & APA_change > +0.1
+dRNA_3UTR_FR113_w1118_PAU_test$diffexpressed[
+  dRNA_3UTR_FR113_w1118_PAU_test$padj < P_cutoff &
+    dRNA_3UTR_FR113_w1118_PAU_test$APA_change > delta
+] <- "Lengthened"
+
+# Shortened: padj < 0.05 & APA_change < -0.1
+dRNA_3UTR_FR113_w1118_PAU_test$diffexpressed[
+  dRNA_3UTR_FR113_w1118_PAU_test$padj < P_cutoff &
+    dRNA_3UTR_FR113_w1118_PAU_test$APA_change < -delta
+] <- "Shortened"
+
+# Counts
+count_Lengthened <- sum(dRNA_3UTR_FR113_w1118_PAU_test$diffexpressed == "Lengthened")
+count_Shortened <- sum(dRNA_3UTR_FR113_w1118_PAU_test$diffexpressed == "Shortened")
+count_No_change <- sum(dRNA_3UTR_FR113_w1118_PAU_test$diffexpressed == "No change")
+
+# Filter for significant genes (for labeling)
+significant_genes <- dRNA_3UTR_FR113_w1118_PAU_test %>%
+  dplyr::filter(diffexpressed != "No change")
+
+# Volcano plot using APA_change and FDR, like APA_plot
+APA_use1 <- ggplot(dRNA_3UTR_FR113_w1118_PAU_test, aes(x = APA_change, y = -log10(padj), col = diffexpressed, label = label)) +
+  geom_hline(yintercept = -log10(P_cutoff), col = "black", linetype = "dashed") +
+  geom_vline(xintercept = delta, col = "black", linetype = "dashed") +
+  geom_vline(xintercept = -delta, col = "black", linetype = "dashed") +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("Lengthened" = "red", "No change"  = "grey", "Shortened"  = "blue"),
+    labels = c(paste("Lengthened (", count_Lengthened, ")", sep = ""),
+      paste("No change (", count_No_change,")", sep = ""),
+      paste("Shortened (", count_Shortened, ")", sep = ""))) +
+  labs(color = " ", x = "APA change (FR113N - w1118)", y = expression("-log"[10]*"adj p-value")) +
+  ggtitle("APA usage FR113N vs w1118: padj ≤ 0.05 and |APA change| ≥ 0.1") +
+  geom_text_repel(family = "Times New Roman", data = significant_genes, aes(label = label), max.overlaps = 10,color = "black") +
+  theme_classic() +
+  theme(plot.title  = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title  = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+
+APA_use1
+
+```
+
+
+```{r, warning=FALSE, message=TRUE}
+dRNA_3UTR_Mettl3_FR113_PAU_test = read.delim("~/Dropbox/all_files/dRNA/dRNA_3UTR/dRNA_3UTR_Mettl3_FR113_APA_data_profile.txt", header = T, sep = "\t", check.names = F)
+
+
+if (!"padj" %in% colnames(dRNA_3UTR_Mettl3_FR113_PAU_test)) {
+  dRNA_3UTR_Mettl3_FR113_PAU_test$padj <- p.adjust(dRNA_3UTR_Mettl3_FR113_PAU_test$pvalue, method = "fdr")
+}
+
+# Label top genes by smallest padj
+dRNA_3UTR_Mettl3_FR113_PAU_test$label <- ifelse(
+  dRNA_3UTR_Mettl3_FR113_PAU_test$gene_name %in% 
+    head(dRNA_3UTR_Mettl3_FR113_PAU_test[order(dRNA_3UTR_Mettl3_FR113_PAU_test$padj), "gene_name"], 500),
+  dRNA_3UTR_Mettl3_FR113_PAU_test$gene_name,
+  NA)
+
+# --- Classify APA trend using SAME logic as APA_plot ---
+dRNA_3UTR_Mettl3_FR113_PAU_test$diffexpressed <- "No change"
+
+# Lengthened (longer 3'UTR): padj < 0.05 & APA_change > +0.1
+dRNA_3UTR_Mettl3_FR113_PAU_test$diffexpressed[
+  dRNA_3UTR_Mettl3_FR113_PAU_test$padj < P_cutoff &
+    dRNA_3UTR_Mettl3_FR113_PAU_test$APA_change > delta
+] <- "Lengthened"
+
+# Shortened: padj < 0.05 & APA_change < -0.1
+dRNA_3UTR_Mettl3_FR113_PAU_test$diffexpressed[
+  dRNA_3UTR_Mettl3_FR113_PAU_test$padj < P_cutoff &
+    dRNA_3UTR_Mettl3_FR113_PAU_test$APA_change < -delta
+] <- "Shortened"
+
+# Counts
+count_Lengthened <- sum(dRNA_3UTR_Mettl3_FR113_PAU_test$diffexpressed == "Lengthened")
+count_Shortened <- sum(dRNA_3UTR_Mettl3_FR113_PAU_test$diffexpressed == "Shortened")
+count_No_change <- sum(dRNA_3UTR_Mettl3_FR113_PAU_test$diffexpressed == "No change")
+
+# Filter for significant genes (for labeling)
+significant_genes <- dRNA_3UTR_Mettl3_FR113_PAU_test %>%
+  dplyr::filter(diffexpressed != "No change")
+
+# Volcano plot using APA_change and FDR, like APA_plot
+APA_use2 <- ggplot(dRNA_3UTR_Mettl3_FR113_PAU_test, aes(x = APA_change, y = -log10(padj), col = diffexpressed, label = label)) +
+  geom_hline(yintercept = -log10(P_cutoff), col = "black", linetype = "dashed") +
+  geom_vline(xintercept = delta, col = "black", linetype = "dashed") +
+  geom_vline(xintercept = -delta, col = "black", linetype = "dashed") +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("Lengthened" = "red", "No change"  = "grey", "Shortened"  = "blue"),
+    labels = c(paste("Lengthened (", count_Lengthened, ")", sep = ""),
+      paste("No change (", count_No_change,")", sep = ""),
+      paste("Shortened (", count_Shortened, ")", sep = ""))) +
+  labs(color = " ", x = "APA change (Mettl3-KO - FR113N)", y = expression("-log"[10]*"adj p-value")) +
+  ggtitle("APA usage Mettl3-KO vs FR113N: padj ≤ 0.05 and |APA change| ≥ 0.1") +
+  geom_text_repel(family = "Times New Roman", data = significant_genes, aes(label = label), max.overlaps = 10,color = "black") +
+  theme_classic() +
+  theme(plot.title  = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title  = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+APA_use2
+```
+
+
+```{r, warning=FALSE, message=TRUE}
+dRNA_3UTR_Mettl3_w118_PAU_test = read.delim("~/Dropbox/all_files/dRNA/dRNA_3UTR/dRNA_3UTR_Mettl3_w118_APA_data_Proifle.txt", header = T, sep = "\t", check.names = F)
+
+
+if (!"padj" %in% colnames(dRNA_3UTR_Mettl3_w118_PAU_test)) {
+  dRNA_3UTR_Mettl3_w118_PAU_test$padj <- p.adjust(dRNA_3UTR_Mettl3_w118_PAU_test$pvalue, method = "fdr")
+}
+
+# Label top genes by smallest padj
+dRNA_3UTR_Mettl3_w118_PAU_test$label <- ifelse(
+  dRNA_3UTR_Mettl3_w118_PAU_test$gene_name %in% 
+    head(dRNA_3UTR_Mettl3_w118_PAU_test[order(dRNA_3UTR_Mettl3_w118_PAU_test$padj), "gene_name"], 500),
+  dRNA_3UTR_Mettl3_w118_PAU_test$gene_name,
+  NA)
+
+# --- Classify APA trend using SAME logic as APA_plot ---
+dRNA_3UTR_Mettl3_w118_PAU_test$diffexpressed <- "No change"
+
+# Lengthened (longer 3'UTR): padj < 0.05 & APA_change > +0.1
+dRNA_3UTR_Mettl3_w118_PAU_test$diffexpressed[
+  dRNA_3UTR_Mettl3_w118_PAU_test$padj < P_cutoff &
+    dRNA_3UTR_Mettl3_w118_PAU_test$APA_change > delta
+] <- "Lengthened"
+
+# Shortened: padj < 0.05 & APA_change < -0.1
+dRNA_3UTR_Mettl3_w118_PAU_test$diffexpressed[
+  dRNA_3UTR_Mettl3_w118_PAU_test$padj < P_cutoff &
+    dRNA_3UTR_Mettl3_w118_PAU_test$APA_change < -delta
+] <- "Shortened"
+
+# Counts
+count_Lengthened <- sum(dRNA_3UTR_Mettl3_w118_PAU_test$diffexpressed == "Lengthened")
+count_Shortened <- sum(dRNA_3UTR_Mettl3_w118_PAU_test$diffexpressed == "Shortened")
+count_No_change <- sum(dRNA_3UTR_Mettl3_w118_PAU_test$diffexpressed == "No change")
+
+# Filter for significant genes (for labeling)
+significant_genes <- dRNA_3UTR_Mettl3_w118_PAU_test %>%
+  dplyr::filter(diffexpressed != "No change")
+
+# Volcano plot using APA_change and FDR, like APA_plot
+APA_use3 <- ggplot(dRNA_3UTR_Mettl3_w118_PAU_test, aes(x = APA_change, y = -log10(padj), col = diffexpressed, label = label)) +
+  geom_hline(yintercept = -log10(P_cutoff), col = "black", linetype = "dashed") +
+  geom_vline(xintercept = delta, col = "black", linetype = "dashed") +
+  geom_vline(xintercept = -delta, col = "black", linetype = "dashed") +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("Lengthened" = "red", "No change"  = "grey", "Shortened"  = "blue"),
+    labels = c(paste("Lengthened (", count_Lengthened, ")", sep = ""),
+      paste("No change (", count_No_change,")", sep = ""),
+      paste("Shortened (", count_Shortened, ")", sep = ""))) +
+  labs(color = " ", x = "APA change (Mettl3-KO - w1118)", y = expression("-log"[10]*"adj p-value")) +
+  ggtitle("APA usage Mettl3-KO vs w1118: padj ≤ 0.05 and |APA change| ≥ 0.1") +
+  geom_text_repel(family = "Times New Roman", data = significant_genes, aes(label = label), max.overlaps = 10,color = "black") +
+  theme_classic() +
+  theme(plot.title  = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title  = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+
+APA_use3
+```
+
+
+
+```{r}
+# Distal/proximal PAS shifts
+# - Examine shifts in distal and proximal PAS usage
+
+Mettl3_w118_dPAU_test_data <- APALORD::end_PAS_examine(Mettl3_w118_PAU, Mettl3_w118_reads, P_cutoff = 0.05, control = "w1118", experimental = "Mettl3-KO", position = "distal", type = "FC")
+Mettl3_w118_pPAU_test_data <- APALORD::end_PAS_examine(Mettl3_w118_PAU, Mettl3_w118_reads, P_cutoff = 0.05, control = "w1118", experimental = "Mettl3-KO", position = "proximal", type = "delta")
+```
+
+# CFD plot of genes implicate in APA regulation
+```{r}
+library(ggplot2)
+library(ggridges)
+library(dplyr)
+library(readr)
+
+W1118_vs_Mettl3_KO_a_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/W1118_vs_Mettl3_KO_a_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+W1118_vs_Mettl3_m_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/W1118_vs_Mettl3_m_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+W1118_vs_Mettl3_psi_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/W1118_vs_Mettl3_psi_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+FR1113_vs_Mettl3_KO_a_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/FR1113_vs_Mettl3_KO_a_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+FR1113_vs_Mettl3_KO_m_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/FR1113_vs_Mettl3_KO_m_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+FR1113_vs_Mettl3_KO_psi_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/FR1113_vs_Mettl3_KO_psi_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+
+FR113_vs_w1118_a_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/FR113_vs_w1118_a_dmr.txt")%>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+FR113_vs_w1118_m_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/FR113_vs_w1118_m_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+FR113_vs_w1118_psi_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/FR113_vs_w1118_psi_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Transcript_IDs,	Transcript_Biotype,	Location))
+```
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggridges)
+library(ggrepel)
+library(ggpubr)
+
+P_cutoff <- 0.05
+delta <- 0.10
+
+# Order of your APA comparisons on the y-axis
+dataset_levels <- c("FR113N vs Mettl3-KO", "w1118 vs Mettl3-KO", "FR113N vs w1118")
+
+comparisons <- list(
+  `FR113N vs w1118` = list(
+    psi = FR113_vs_w1118_psi_dmr,
+    m5C = FR113_vs_w1118_m_dmr,
+    m6A = FR113_vs_w1118_a_dmr,
+    pasU = dRNA_3UTR_FR113_w1118_PAU_test),
+  `FR113N vs Mettl3-KO` = list(
+    psi = FR1113_vs_Mettl3_KO_psi_dmr,
+    m5C = FR1113_vs_Mettl3_KO_m_dmr,
+    m6A = FR1113_vs_Mettl3_KO_a_dmr,
+    pasU = dRNA_3UTR_Mettl3_FR113_PAU_test),
+  `w1118 vs Mettl3-KO` = list(
+    psi = W1118_vs_Mettl3_psi_dmr,
+    m5C = W1118_vs_Mettl3_m_dmr,
+    m6A = W1118_vs_Mettl3_KO_a_dmr,
+    pasU = dRNA_3UTR_Mettl3_w118_PAU_test))
+
+
+classify_apa <- function(df, P_cutoff = 0.05, delta = 0.10) {
+    df %>%
+        mutate(diffexpressed = case_when(
+          padj < P_cutoff & APA_change >  delta ~ "Lengthened",
+          padj < P_cutoff & APA_change < -delta ~ "Shortened",
+          TRUE ~ "No change"))
+}
+
+
+#add modification status for ONE modification type
+add_mod_status <- function(pas_df, dmr_df, mod_name) {
+    mod_genes <- unique(dmr_df$Gene_ID)
+    
+    pas_df %>% mutate(Mod = mod_name, Status = if_else(gene_name %in% mod_genes, mod_name, paste0("Non-", mod_name)))
+}
+
+
+apa_mod_df <- purrr::imap_dfr(comparisons, function(obj, cmp_name) {
+    pasU <- obj$pasU %>%
+        classify_apa(P_cutoff = P_cutoff, delta = delta) %>%
+        mutate(Dataset = cmp_name)
+    
+    bind_rows(add_mod_status(pasU, obj$m6A, "m6A"),
+      add_mod_status(pasU, obj$m5C, "m5C"),
+      add_mod_status(pasU, obj$psi, "Psi"))
+}) %>%
+  mutate(Dataset= factor(Dataset, levels = dataset_levels),
+    Mod = factor(Mod, levels = c("m6A", "m5C", "Psi")),
+    diffexpressed = factor(diffexpressed, levels = c("Lengthened", "Shortened","No change")))
+```
+
+
+
+```{r}
+make_apa_plots_for_mod <- function(df, mod_name = c("m6A","m5C","Psi"),
+                                   fill_cols = NULL, use_sig_only = TRUE) {
+  mod_name <- match.arg(mod_name)
+
+  if (is.null(fill_cols)) {
+    fill_cols <- c("#006A8E", "#B1283A")
+    names(fill_cols) <- c(mod_name, paste0("Non-", mod_name))
+  }
+
+  ev_df <- df %>%
+    filter(Mod == mod_name) %>%
+    { if (use_sig_only) dplyr::filter(., diffexpressed != "No change") else . } %>%
+    mutate(
+      Status = factor(Status, levels = c(mod_name, paste0("Non-", mod_name))))
+  # Statistical comparisons per Dataset
+  stat_results <- ev_df %>%
+    group_by(Dataset) %>%
+    summarise( p_value = {
+        tab <- table(Status)
+        if (all(c(mod_name, paste0("Non-", mod_name)) %in% names(tab)) &&
+            min(tab) >= 2) {
+          wilcox.test(APA_change[Status == mod_name],
+                      APA_change[Status == paste0("Non-", mod_name)])$p.value
+        } else {
+          NA_real_
+        }
+      },
+      .groups = "drop") %>%
+    mutate(label = dplyr::case_when(
+      is.na(p_value) ~ "NA",
+      p_value < 0.001 ~ "***",
+      p_value < 0.01  ~ "**",
+      p_value < 0.05  ~ "*",
+      TRUE ~ "N.S"))
+
+  count_data <- ev_df %>%
+    count(Dataset, Status, name = "Count")
+
+  height_data <- count_data %>%
+    group_by(Dataset) %>%
+    summarise(y_pos = sum(Count) * 1.05, .groups = "drop") %>%
+    left_join(stat_results, by = "Dataset")
+
+  # Plot 1: ridge APA_change distributions (no facet) ----
+  p_ridge <- ggplot(ev_df, aes(x = APA_change, y = Dataset, fill = Status)) +
+    geom_density_ridges(alpha = 0.9, scale = 1.2, rel_min_height = 0.01, size = 0.2) +
+    geom_vline(xintercept = c(-delta, delta), linetype = "dashed") +
+    scale_fill_manual(values = fill_cols, drop = FALSE) +
+    coord_cartesian(xlim = c(-0.9, 0.9)) +
+    labs(title = paste0("APA change: ", mod_name, " vs Non-", mod_name), x = "APA change", y = "Comparison", fill = paste(mod_name, "Status")) +
+    theme_classic(base_size = 12, base_family = "Times New Roman") +
+    theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+      axis.title = element_text(size = 12),
+      axis.text = element_text(size = 12),
+      legend.position = "right", legend.text = element_text(size = 12, family = "Times New Roman"))
+
+  # ---- Plot 2: stacked counts per Dataset ----
+  p_counts <- ggplot(count_data, aes(x = Dataset, y = Count, fill = Status)) +
+    geom_bar(stat = "identity", position = "stack", width = 0.5) +
+    geom_text(aes(label = Count), position = position_stack(vjust = 0.5), color = "black", size = 4, family = "Times New Roman") +
+    geom_text(data = height_data, aes(x = Dataset, y = y_pos, label = label), inherit.aes = FALSE, vjust = 0, size = 5, family = "Times New Roman") +
+    scale_fill_manual(values = fill_cols, drop = FALSE) +
+    labs(title = paste0("APA-significant genes: ", mod_name, " vs Non-", mod_name), x = "Comparison", y = "Number of genes", fill = paste(mod_name, "Status")) +
+    coord_flip() +
+    theme_classic(base_size = 12, base_family = "Times New Roman") +
+    theme(plot.title  = element_text(size = 12, face = "bold", hjust = 0.5),
+      axis.title  = element_text(size = 12),
+      axis.text = element_text(size = 12),
+      legend.position = "right",
+      legend.text = element_text(size = 12, family = "Times New Roman"),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.title.y = element_blank())
+
+  list(ridge = p_ridge, counts = p_counts, stats = stat_results)
+}
+
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+mods <- c("m6A", "m5C", "Psi")
+
+plots_apa <- lapply(mods, function(mod) {
+  message("Rendering ", mod)
+  res <- make_apa_plots_for_mod(apa_mod_df, mod_name = mod)
+
+  # Combined panel like your ΔPSI example
+  combined <- ggpubr::ggarrange(
+    res$ridge + labs(title = NULL),
+    res$counts + labs(title = NULL),ncol = 2,
+    widths = c(2.2, 1), 
+    common.legend = TRUE, legend = "top", labels = NULL) %>%
+    {
+      ggpubr::annotate_figure(
+        .,
+        top = ggpubr::text_grob(paste0("APA change: ", mod, " vs Non-", mod, " - Distributions & Counts"), face = "bold", size = 12, family = "Times New Roman"))
+    }
+
+  print(combined)
+  list(combined = combined, ridge = res$ridge, counts = res$counts, stats = res$stats)
+})
+
+```
+
+
+```{r}
+# Distal/proximal PAS shifts
+# - Examine shifts in distal and proximal PAS usage
+
+Mettl3_FR113_dPAU_test_data <- APALORD::end_PAS_examine(Mettl3_FR113_PAU, Mettl3_FR113_reads, P_cutoff = 0.05, control = "FR113N", experimental = "Mettl3-KO", position = "distal", type = "FC")
+Mettl3_FR113_pPAU_test_data <- APALORD::end_PAS_examine(Mettl3_FR113_PAU, Mettl3_FR113_reads, P_cutoff = 0.05, control = "FR113N", experimental = "Mettl3-KO", position = "proximal", type = "delta")
+```
+
+
+```{r}
+FR113_w1118_dPAU_test_data <- APALORD::end_PAS_examine(FR113_w1118_PAU, FR113_w1118reads, P_cutoff = 0.05, control = "FR113N", experimental = "w1118", position = "distal", type = "FC")
+FR113_w1118_pPAU_test_data <- APALORD::end_PAS_examine(FR113_w1118_PAU, FR113_w1118reads, P_cutoff = 0.05, control = "FR113N", experimental = "w1118", position = "proximal", type = "delta")
+```
+
+
+
+```{r}
+# APA profiling
+# - Generate APA profiles and visualize changes
+message("Profiling APA changes...")
+Mettl3_FR113_APA_data <- APA_profile(gene_reference, Mettl3_FR113_reads, control = "FR113N", experimental = "Mettl3-KO", cores = 5, direct_RNA = TRUE)
+
+Mettl3_FR113_APA_gene_table <- APA_plot(Mettl3_FR113_APA_data)
+
+#write.table(Mettl3_FR113_APA_data, file = "~/Dropbox/all_files/dRNA/dRNA_3UTR/dRNA_3UTR_Mettl3_FR113_APA_data_profile.txt", quote = FALSE, col.names = TRUE, row.names = FALSE, sep = "\t")
+#write.table(Mettl3_FR113_APA_gene_table, file = "~/Dropbox/all_files/dRNA/dRNA_3UTR/dRNA_3UTR_Mettl3_FR113_APA_gene_table.txt", quote = FALSE, col.names = TRUE, row.names = FALSE, sep = "\t")
+
+Mettl3_w118_APA_data <- APA_profile(gene_reference, Mettl3_w118_reads, control = "w1118", experimental = "Mettl3-KO", cores = 5, direct_RNA = TRUE)
+
+Mettl3_w118_APA_gene_table <- APA_plot(Mettl3_w118_APA_data)
+#write.table(Mettl3_w118_APA_gene_table, file = "~/Dropbox/all_files/dRNA/dRNA_3UTR/dRNA_3UTR_Mettl3_w118_APA_gene_table.txt", quote = FALSE, col.names = TRUE, row.names = FALSE, sep = "\t")
+#write.table(Mettl3_w118_APA_data, file = "~/Dropbox/all_files/dRNA/dRNA_3UTR/dRNA_3UTR_Mettl3_w118_APA_data_Proifle.txt", quote = FALSE, col.names = TRUE, row.names = FALSE, sep = "\t")
+
+FR113_w118_APA_data <- APA_profile(gene_reference, FR113_w1118reads, control = "FR113N", experimental = "w1118", cores = 5, direct_RNA = TRUE)
+FR113_w118_APA_gene_table <- APA_plot(FR113_w118_APA_data)
+#write.table(FR113_w118_APA_data, file = "~/Dropbox/all_files/dRNA/dRNA_3UTR/dRNA_3UTR_FR113_w118_APA_data_profile.txt", quote = FALSE, col.names = TRUE, row.names = FALSE, sep = "\t")
+#write.table(FR113_w118_APA_gene_table, file = "~/Dropbox/all_files/dRNA/dRNA_3UTR/dRNA_3UTR_FR113_w118_APA_FR113_w118_APA_gene_table.txt", quote = FALSE, col.names = TRUE, row.names = FALSE, sep = "\t")
+```
+
+
+```{r}
+#/media/george//Extreme_SSD/dRNASEQ/bam_files/APALORD_inputs/
+Mettl3_FR113_APA_data_profile = read.delim("~/Dropbox/all_files/dRNA/dRNA_3UTR/dRNA_3UTR_Mettl3_FR113_APA_data_profile.txt", header = T, sep = "\t", check.names = F)
+
+Mettl3_w118_APA_data_profile = read.delim("~/Dropbox/all_files/dRNA/dRNA_3UTR/dRNA_3UTR_Mettl3_w118_APA_data_Proifle.txt", header = T, sep = "\t", check.names = F)
+
+FR113_w118_APA_data_profile = read.delim("~/Dropbox/all_files/dRNA/dRNA_3UTR/dRNA_3UTR_FR113_w118_APA_data_profile.txt", header = T, sep = "\t", check.names = F)
+```
+
+
+1) Faceted mean vs mean scatter (gene-level)
+(i) compute mean PAU per gene per condition from your APALORD gene tables (the PAU columns are comma-separated lists), then (ii) make:
+
+a faceted mean-vs-mean scatter (A vs B)
+
+a “PAUs vs APA_change” plot within each file
+
+a cumulative (ECDF) plot of PAU (per-PAS, un-nested)
+
+The helpers below work for any of your three gene tables:
+
+Mettl3_FR113_APA_gene_table
+
+FR113_w1118_APA_gene_table
+
+Mettl3_w118_APA_gene_table
+
+
+
+```{r, warning=FALSE, message=TRUE}
+library(dplyr)
+library(ggplot2)
+library(forcats)
+library(purrr)
+
+fdr_cut <- 0.05
+min_abs_change <- 0.1
+min_pas <- 1
+datasets_order <- c("FR113N vs w1118", "w1118 vs Mettl3-KO", "FR113N vs Mettl3-KO")
+
+prep_apa_counts <- function(df, dataset_label) {
+  df %>%
+    mutate(FDR = p.adjust(pvalue, method = "BH"), APA_class = recode(APA_type,"Mixed_APA" = "Mixed APA", "Last_exon_tandem_APA" = "Last Exon (tandem)"), direction = case_when(APA_change >  0 ~ "APA_change > 0", APA_change <  0 ~ "APA_change < 0", TRUE ~ "APA_change = 0")) %>%
+    filter(APA_type %in% c("Mixed_APA","Last_exon_tandem_APA"), FDR < fdr_cut, abs(APA_change) >= min_abs_change, number_of_PAS >= min_pas, !is.na(gene_id)) %>% 
+    distinct(gene_id, APA_class, direction) %>%
+    count(APA_class, direction, name = "n") %>%
+    mutate(dataset = dataset_label)
+}
+
+
+counts_all <- bind_rows(
+  prep_apa_counts(dRNA_3UTR_Mettl3_w118_PAU_test, "w1118 vs Mettl3-KO"),
+  prep_apa_counts(dRNA_3UTR_FR113_w1118_PAU_test, "FR113N vs w1118"),
+  prep_apa_counts(dRNA_3UTR_Mettl3_FR113_PAU_test,"FR113N vs Mettl3-KO")) %>%
+  mutate(dataset = factor(dataset, levels = datasets_order),
+    APA_class = factor(APA_class, levels = c("Mixed APA","Last Exon (tandem)")),
+    direction = factor(direction, levels = c("APA_change > 0","APA_change < 0","APA_change = 0")))
+
+# stacked by direction, faceted by dataset
+pal_dir <- c("APA_change > 0"="#B1283A", "APA_change < 0"="#006A8E", "APA_change = 0"="grey70")
+
+pA <- ggplot(counts_all, aes(x = APA_class, y = n, fill = direction)) +
+  geom_col(width = 0.65, color = "black", linewidth = 0.25) +
+  geom_text(aes(label = n), position = position_stack(vjust = 0.5), size = 6, family = "Times New Roman") +
+  scale_fill_manual(values = pal_dir, name = "Direction (sign of APA_change)") +
+  facet_wrap(~ dataset, nrow = 1) +
+  labs(family = "Times New Roman", x = NULL, y = "Number of significant genes", title = "Significant APA genes by class across datasets",
+    subtitle = paste0("BH FDR < ", fdr_cut,
+                      if (min_abs_change>0) paste0("; |APA_change| ≥ ", min_abs_change) else "",
+                      if (min_pas>0) paste0("; ≥", min_pas, " PAS") else "")) +
+  theme_classic(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.text.y = element_text(size = 10), plot.title = element_text(face = "bold", hjust = 0.5)) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+
+pA
+
+#Plot B (optional): totals per class (no direction), faceted
+totals <- counts_all %>%
+  group_by(dataset, APA_class) %>%
+  summarise(n = sum(n), .groups = "drop")
+
+pal_class <- c("Mixed APA"="#4DAF4A","Last Exon (tandem)"="#377EB8")
+
+pB <- ggplot(totals, aes(x = APA_class, y = n, fill = APA_class)) +
+  geom_col(width = 0.65, color = "black", linewidth = 0.25) +
+  geom_text(aes(label = n), vjust = -0.35, size = 6, family = "Times New Roman") +
+  scale_fill_manual(values = pal_class, guide = "none") +
+  facet_wrap(~ dataset, nrow = 1) +
+  labs(x = NULL, y = "Number of significant genes", title = "Significant APA genes by class across datasets (totals)", family = "Times New Roman") +
+  theme_classic(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.text.y = element_text(size = 10), plot.title = element_text(face = "bold", hjust = 0.5)) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+
+# Uncomment to view or save:# pB
+# ggsave("APA_counts_by_class_by_dataset_totals.pdf", pB, width = 10, height = 3.2, useDingbats = FALSE)
+
+
+```
+
+
+```{r}
+fdr_cut <- 0.05
+min_abs_change <- 0.1
+min_pas <- 1
+
+# helper: get sig genes from a single contrast
+get_sig_genes <- function(df, dataset_label) {
+  df %>%
+    mutate(FDR = p.adjust(pvalue, method = "BH"),
+      APA_class = dplyr::recode(APA_type,"Mixed_APA" = "Mixed APA", "Last_exon_tandem_APA" = "Last Exon (tandem)", .default = NA_character_),
+      direction = dplyr::case_when(APA_change > 0 ~ "APA_change > 0",
+        APA_change < 0 ~ "APA_change < 0", TRUE ~ "APA_change = 0"),
+      dataset_label = dataset_label) %>%
+    dplyr::filter(APA_type %in% c("Mixed_APA", "Last_exon_tandem_APA"), !is.na(gene_id),
+      FDR < fdr_cut, abs(APA_change) >= min_abs_change, number_of_PAS >= min_pas) %>%
+    # one row per gene × dataset × class × direction
+    dplyr::distinct(dataset_label, gene_id, APA_class, direction)
+}
+
+# this object is "rows that were shorten or lengthen" for each dataset
+sig_df <- dplyr::bind_rows(
+  get_sig_genes(dRNA_3UTR_Mettl3_FR113_PAU_test, "FR113N vs Mettl3-KO"),
+  get_sig_genes(dRNA_3UTR_Mettl3_w118_PAU_test, "w1118 vs Mettl3-KO"),
+  get_sig_genes(dRNA_3UTR_FR113_w1118_PAU_test, "FR113N vs w1118"))
+
+
+datasets_order <- c("FR113N vs w1118","w1118 vs Mettl3-KO", "FR113N vs Mettl3-KO")
+
+pretty_dataset_labels <- c("w1118 vs Mettl3-KO" = "w1118 vs Mettl3-KO", "FR113N vs w1118" = "FR113N vs w1118", "FR113N vs Mettl3-KO" = "FR113N vs Mettl3-KO")
+
+make_apa_type_bar_for_mod_sig <- function(sig_df, apa_mod_df, mod_name = c("m6A","m5C","Psi")) {
+
+  mod_name <- match.arg(mod_name)
+
+  pal_dir <- c("APA_change > 0" = "#B1283A", "APA_change < 0" = "#006A8E", "APA_change = 0" = "grey70")
+
+  # prepare gene-level modification status for this mod
+  mod_status <- apa_mod_df %>%
+    filter(Mod == mod_name) %>%
+    mutate(dataset_label = pretty_dataset_labels[as.character(Dataset)]) %>%
+    # keep only genes that were shorten/lengthen in that dataset
+    inner_join(sig_df, by = c("dataset_label", "gene_id")) %>%
+    group_by(Mod, Dataset, dataset_label, gene_id, APA_class, direction) %>%
+    summarise(
+      # collapse multiple rows per gene: if any m6A peak, call gene m6A, otherwise Non-m6A
+      Status = case_when(any(Status == mod_name) ~ mod_name, TRUE ~ paste0("Non-", mod_name)),
+      .groups = "drop")
+
+  counts <- mod_status %>%
+    count(Dataset, dataset_label, Status, APA_class, direction, name = "n") %>%
+    mutate(dataset_label = factor(dataset_label, levels = datasets_order),
+      APA_class = factor(APA_class, levels = c("Mixed APA", "Last Exon (tandem)")),
+      direction = factor(direction, levels = c("APA_change > 0", "APA_change < 0", "APA_change = 0")))
+
+  p <- ggplot(counts, aes(x = APA_class, y = n, fill = direction)) +
+    geom_col(width = 0.6, color = "black", linewidth = 0.25) +
+    geom_text(aes(label = n), position = position_stack(vjust = 0.5), size = 5, family = "Times New Roman") +
+    scale_fill_manual(values = pal_dir, name = "Direction (sign of APA_change)") +
+    facet_grid(dataset_label ~ Status) +
+    labs(x = NULL, y = "Number of significant genes", title = paste0("Significant APA genes by class (", mod_name, " vs Non-", mod_name, ")"), subtitle = paste0("BH FDR < ", fdr_cut, "; |APA_change| ≥ ", min_abs_change, "; ≥", min_pas, " PAS")) +
+    theme_classic(base_size = 14, base_family = "Times New Roman") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+      axis.text.y = element_text(size = 14),
+      strip.text = element_text(size = 14),
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+      legend.position = "right",
+      legend.text = element_text(size = 14, family = "Times New Roman"))
+
+  list(plot = p, counts = counts)
+}
+m6A_bar_sig <- make_apa_type_bar_for_mod_sig(sig_df, apa_mod_df, "m6A")$plot
+m5C_bar_sig <- make_apa_type_bar_for_mod_sig(sig_df, apa_mod_df, "m5C")$plot
+Psi_bar_sig <- make_apa_type_bar_for_mod_sig(sig_df, apa_mod_df, "Psi")$plot
+m6A_bar_sig
+m5C_bar_sig
+Psi_bar_sig
+```
+
+# Box plot showing specifc genes and their PAU
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(patchwork)
+
+plot_gene_APA_ <- function(apa_mod_df, gene_name_to_plot) {
+
+  df_gene <- apa_mod_df %>%
+    filter(gene_name == gene_name_to_plot)
+
+  if (nrow(df_gene) == 0) {
+    stop("No rows found for gene_name = ", gene_name_to_plot)
+  }
+
+  
+  df_gene_core <- df_gene %>%
+    distinct(gene_id, gene_name, Dataset,APA_change, padj, PAUs_FR113N, PAUs_w1118, PAUs_Mettl3_KO) %>%
+    mutate(Dataset = as.character(Dataset))
+
+  
+  make_panel <- function(dataset_id, pair, pretty_label) {
+
+    row_info <- df_gene_core %>% filter(Dataset == dataset_id)
+
+    if (nrow(row_info) == 0) return(NULL)
+
+    label_text <- paste0(pretty_label, "\nAPA_change = ", signif(row_info$APA_change, 3), ", padj = ", signif(row_info$padj, 3))
+
+    df_long <- row_info %>% pivot_longer(cols = c(PAUs_FR113N, PAUs_w1118, PAUs_Mettl3_KO), names_to = "condition_raw", values_to = "PAU_str") %>%
+      filter(!is.na(PAU_str)) %>%
+      mutate(condition = recode(condition_raw, "PAUs_FR113N" = "FR113N","PAUs_w1118" = "w1118", "PAUs_Mettl3_KO" = "Mettl3-KO"), PAU_str = gsub(" ", "", PAU_str)) %>%
+      separate_rows(PAU_str, sep = ",") %>%
+      mutate(PAU = as.numeric(PAU_str),condition = factor(condition, levels = pair)) %>%
+      filter(condition %in% pair)
+
+    if (nrow(df_long) == 0) return(NULL)
+
+    ggplot(df_long, aes(x = condition, y = PAU, fill = condition)) +
+      geom_boxplot(outlier.size = 0.8, alpha = 0.9) +
+      geom_jitter(width = 0.1, alpha = 0.9, size = 3) +
+      labs(x = NULL, y = "PAU (%)", title = label_text) +
+      scale_fill_manual(values = c("w1118"    = "#1b9e77", "FR113N"   = "#7570b3","Mettl3-KO" = "#d95f02")) +
+      theme_classic(base_size = 12) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+  }
+
+  p1 <- make_panel("FR113N_vs_w1118", 
+                   pair = c("w1118", "FR113N"),
+                   pretty_label = "FR113N vs w1118")
+
+  p2 <- make_panel("FR1113N_vs_Mettl3-KO",
+                   pair = c("FR113N", "Mettl3-KO"),
+                   pretty_label = "Mettl3-KO vs FR113N")
+
+  p3 <- make_panel("W1118_vs_Mettl3-KO",
+                   pair = c("w1118", "Mettl3-KO"),
+                   pretty_label = "Mettl3-KO vs w1118")
+
+  gene_id   <- unique(df_gene_core$gene_id)
+  gene_name <- unique(df_gene_core$gene_name)
+
+  
+  (p1 | p2 | p3) +
+    plot_annotation(title = paste0("APA usage for ", gene_name, " (", gene_id, ") across genotypes"),
+      theme = theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5)))
+}
+
+# example: pick a gene by gene_name (from your apa_mod_df)
+nrv3_Aplot = plot_gene_APA_(apa_mod_df, "nrv3")
+nrv3_Aplot
+Sap47_Aplot = plot_gene_APA_(apa_mod_df, "Sap47")
+Sap47_Aplot
+Cam_Aplot = plot_gene_APA_(apa_mod_df, "Cam")
+Cam_Aplot
+alphaSnap_Aplot = plot_gene_APA_(apa_mod_df, "alphaSnap")
+alphaSnap_Aplot
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(forcats)
+library(purrr)
+library(tidyr)
+
+fdr_cut <- 0.05
+min_abs_change <- 0.10
+keep_classes <- c("Mixed_APA","Last_exon_tandem_APA")
+datasets <- list(
+  `Mettl3-KO vs w1118` = dRNA_3UTR_Mettl3_w118_PAU_test,
+  `FR113N vs w1118` = dRNA_3UTR_FR113_w1118_PAU_test,
+  `Mettl3-KO vs FR113N` = dRNA_3UTR_Mettl3_FR113_PAU_test)
+dataset_levels <- names(datasets)
+
+prep_pas_df <- function(df, dataset_label){
+  df %>%
+    mutate(FDR = p.adjust(pvalue, method = "BH"),
+      APA_class = recode(APA_type,"Mixed_APA" = "Mixed APA","Last_exon_tandem_APA" = "Last Exon (tandem)")) %>%
+    filter(APA_type %in% keep_classes,
+      FDR < fdr_cut,
+      abs(APA_change) >= min_abs_change,
+      !is.na(gene_id),
+      !is.na(number_of_PAS)) %>%
+    distinct(gene_id, .keep_all = TRUE) %>% 
+    mutate(
+      PAS_bin = case_when(
+        number_of_PAS <= 1 ~ "1",
+        number_of_PAS == 2 ~ "2",
+        number_of_PAS == 3 ~ "3",
+        number_of_PAS == 4 ~ "4",
+        number_of_PAS >= 5 ~ "5+",
+        TRUE ~ as.character(number_of_PAS)),
+      dataset = dataset_label) %>%
+    dplyr::select(dataset, gene_id, APA_class, number_of_PAS, PAS_bin)
+}
+
+pas_all <- imap_dfr(datasets, prep_pas_df) %>%
+  mutate(dataset = factor(dataset, levels = dataset_levels),
+    APA_class = factor(APA_class, levels = c("Mixed APA","Last Exon (tandem)")),
+    PAS_bin = factor(PAS_bin, levels = c("1","2","3","4","5+")))
+
+# PANEL A: Stacked bar by PAS_bin 
+
+counts_bin <- pas_all %>%
+  count(dataset, APA_class, PAS_bin, name = "n") %>%
+  group_by(dataset, APA_class) %>%
+  mutate(prop = n / sum(n)) %>%
+  ungroup()
+
+pal_bins <- c("1"="#f0f0f0","2"="#c6dbef","3"="#9ecae1","4"="#6baed6","5+"="#3182bd")
+
+pA_num <- ggplot(counts_bin, aes(x = APA_class, y = n, fill = PAS_bin)) +
+  geom_col(width = 0.65, color = "black", linewidth = 0.25) +
+  geom_text(aes(label = n), position = position_stack(vjust = 0.5), size = 6, family = "Times New Roman") +
+  scale_fill_manual(values = pal_bins, name = "# PAS") +
+  facet_wrap(~ dataset, nrow = 1) +
+  labs(x = NULL, y = "Number of significant genes", title = "Genes by number of PAS (significant APA calls)",
+    subtitle = paste0("Classes: Mixed APA & Last Exon (tandem); BH FDR < ", fdr_cut, if (min_abs_change>0) paste0("; |APA_change| ≥ ", min_abs_change) else "")) +
+  theme_classic(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.text.y = element_text(size = 10), plot.title = element_text(face = "bold", hjust = 0.5)) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+
+pA_num
+
+# panel B: Violin + box (distribution of #PAS) 
+pB <- ggplot(pas_all, aes(x = APA_class, y = number_of_PAS, fill = APA_class)) +
+  geom_violin(trim = TRUE, alpha = 0.9, linewidth = 0.25, color = "black") +
+  geom_boxplot(width = 0.18, outlier.size = 0.8, outlier.alpha = 0.5) +
+  stat_summary(fun = median, geom = "point", size = 1.5, shape = 21, fill = "white") +
+  scale_fill_manual(values = c("Mixed APA"="#4DAF4A","Last Exon (tandem)"="#377EB8"), guide = "none") +
+  facet_wrap(~ dataset, nrow = 1) +
+  labs(x = NULL, y = "Number of PAS per gene", title = "Distribution of PAS per gene for significant APA genes") +
+  theme_classic(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.text.y = element_text(size = 10), plot.title = element_text(face = "bold", hjust = 0.5)) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+```
+
+```{r}
+
+gene_explore(gene_reference, FR113_w1118reads, "nrv3", APA_table = FR113_w118_APA_gene_table, direct_RNA = TRUE)
+
+gene_explore(gene_reference, Mettl3_w118_reads, "nrv3", APA_table = Mettl3_w118_APA_gene_table, direct_RNA = TRUE)
+
+
+gene_explore(gene_reference, Mettl3_FR113_reads, "nrv3", APA_table = Mettl3_FR113_APA_gene_table, direct_RNA = TRUE)
+```
+
+# Patch Figure 3
+```{r, warning=FALSE, message=FALSE}
+library(patchwork)
+# Ensure each sub-plot already has clear titles/labels and consistent y-limits if needed.
+
+APA_Fig3 <- ((APA_use1 | APA_use2 | APA_use3) / (pA | pA_num | plot_spacer())) +
+  plot_annotation(title = NULL, tag_levels = "A",
+    theme = theme(plot.title = element_text(size = 12, family = "Times New Roman"))) &
+  theme(text= element_text(size = 12, family = "Times New Roman"), axis.title  = element_text(size = 12), axis.text = element_text(size = 12), strip.text = element_text(size = 12), legend.text = element_text(size = 12), legend.title= element_text(size = 12))
+
+APA_Fig3
+
+```
+
+```{r}
+# Combine all three APA use plots (m6A, m5C, Psi)
+# and below them add the overall APA class barplots (pA, pB, etc.)
+APA_use1 <- plots_apa[[1]]$combined  # m6A
+APA_use2 <- plots_apa[[2]]$combined  # m5C
+APA_use3 <- plots_apa[[3]]$combined  # Psi
+
+
+Fig_mod_APA <- ((APA_use1 | APA_use2 | APA_use3) / (m6A_bar_sig | m5C_bar_sig | Psi_bar_sig)) +
+  plot_annotation(title = "Epitranscriptomic modifications stratify APA regulation",
+    tag_levels = "A",theme = theme(plot.title = element_text(size = 12, face = "bold", family = "Times New Roman", hjust = 0.5))) &
+  theme(text = element_text(size = 12, family = "Times New Roman"),
+    axis.title = element_text(size = 12),
+    axis.text  = element_text(size = 12),
+    strip.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 12))
+
+Fig_mod_APA
+
+```
+
+
+```{r}
+#/ (Cam_Aplot | alphaSnap_Aplot)
+Fig3_APA_change <- (nrv3_Aplot / Sap47_Aplot) +
+  plot_annotation(title = NULL, tag_levels = "A",
+    theme = theme(plot.title = element_text(size = 12, family = "Times New Roman"))) &
+  theme(text= element_text(size = 12, family = "Times New Roman"), axis.title  = element_text(size = 12), axis.text = element_text(size = 12), strip.text = element_text(size = 12), legend.text = element_text(size = 12), legend.title= element_text(size = 12))
+Fig3_APA_change
+```
+
+
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(stringr)
+
+
+fdr_cut <- 0.05
+min_abs_change <- 0.1
+require_sig <- TRUE
+
+
+clean_one <- function(df_raw, dataset_label){
+  df <- df_raw %>%
+    mutate(FDR = p.adjust(pvalue, method = "BH"),
+      APA_class = recode(APA_type, "Mixed_APA" = "Mixed APA", "Last_exon_tandem_APA" = "Last Exon (tandem)"),
+      direction = case_when(APA_change > 0 ~ "APA_change > 0", APA_change < 0 ~ "APA_change < 0", TRUE ~ "APA_change = 0"))
+
+  if (require_sig) {
+    df <- df %>% filter(FDR < fdr_cut, abs(APA_change) >= min_abs_change)
+  }
+
+  df %>%
+    filter(!is.na(gene_id), !is.na(number_of_PAS)) %>%
+    mutate(dataset = dataset_label)
+}
+
+mode_char <- function(x){
+  if (length(x) == 0) return(NA_character_)
+  tab <- sort(table(x), decreasing = TRUE)
+  names(tab)[1]
+}
+
+# assemble all three 
+all_apa <- bind_rows(clean_one(Mettl3_w118_APA_data_profile, "Mettl3-KO vs w1118"),
+  clean_one(FR113_w118_APA_data_profile, "FR113N vs w1118"),
+  clean_one(Mettl3_FR113_APA_data_profile, "Mettl3-KO vs FR113N"))
+
+# per-dataset distribution stats
+pas_stats <- all_apa %>%
+  group_by(dataset) %>%
+  summarise(n_genes = n_distinct(gene_id),
+    min_PAS = min(number_of_PAS, na.rm = TRUE),
+    q1_PAS = quantile(number_of_PAS, 0.25, na.rm = TRUE),
+    median_PAS = median(number_of_PAS, na.rm = TRUE),
+    mean_PAS = mean(number_of_PAS, na.rm = TRUE),
+    q3_PAS = quantile(number_of_PAS, 0.75, na.rm = TRUE),
+    max_PAS = max(number_of_PAS, na.rm = TRUE),
+    genes_5plus = sum(dplyr::n_distinct(gene_id[number_of_PAS >= 5])),
+    prop_5plus = genes_5plus / n_genes) %>%
+  ungroup()
+
+#per-dataset PAS bins (nice for a table/appendix)
+pas_bins <- all_apa %>%
+  distinct(dataset, gene_id, number_of_PAS) %>%    # one row per gene
+  mutate(PAS_bin = case_when(
+    number_of_PAS <= 1 ~ "1",
+    number_of_PAS == 2 ~ "2",
+    number_of_PAS == 3 ~ "3",
+    number_of_PAS == 4 ~ "4",
+    number_of_PAS >= 5 ~ "5+")) %>%
+  count(dataset, PAS_bin, name = "n_genes") %>%
+  group_by(dataset) %>%
+  mutate(prop = n_genes / sum(n_genes)) %>%
+  ungroup()
+
+#top gene(s) with most PAS per dataset
+# Handle ties and collect useful metadata (name, biotype, classes, directions)
+top_pas <- all_apa %>%
+  group_by(dataset, gene_id, gene_name, gene_biotype) %>%
+  summarise(number_of_PAS = max(number_of_PAS, na.rm = TRUE),
+    classes = paste(sort(unique(APA_class)), collapse = "; "),
+    directions = paste(sort(unique(direction)), collapse = "; "),
+    median_APA_change = median(APA_change, na.rm = TRUE),
+    min_FDR = min(FDR, na.rm = TRUE),
+    .groups = "drop") %>%
+  group_by(dataset) %>%
+  filter(number_of_PAS == max(number_of_PAS, na.rm = TRUE)) %>%  # keep all ties
+  arrange(dataset, desc(number_of_PAS), min_FDR) %>%
+  mutate(rank_within = row_number()) %>%
+  ungroup()
+
+# top 10 by PAS per dataset
+top10_pas <- all_apa %>%
+  group_by(dataset, gene_id, gene_name) %>%
+  summarise(number_of_PAS = max(number_of_PAS, na.rm = TRUE),
+            classes = paste(sort(unique(APA_class)), collapse = "; "),
+            .groups = "drop") %>%
+  group_by(dataset) %>%
+  slice_max(order_by = number_of_PAS, n = 10, with_ties = TRUE) %>%
+  arrange(dataset, desc(number_of_PAS), gene_id) %>%
+  ungroup()
+
+#  cross-dataset overlap of high-PAS genes 
+# Which genes appear in the top-10 lists in ≥2 datasets?
+overlap_highPAS <- top10_pas %>%
+  group_by(gene_id, gene_name) %>%
+  summarise(n_datasets_listed = n_distinct(dataset),
+            datasets = paste(sort(unique(dataset)), collapse = " | "),
+            max_PAS  = max(number_of_PAS), .groups = "drop") %>%
+  filter(n_datasets_listed >= 2) %>%
+  arrange(desc(n_datasets_listed), desc(max_PAS), gene_name)
+
+# summaries
+pas_stats
+pas_bins
+top_pas
+top10_pas
+overlap_highPAS
+
+```
+
+# PolyA tail length and estimates
+
+```{r}
+library(readr)
+library(dplyr)
+
+read_polya <- function(path) {
+  expected <- c("sample","read_id","rname","pos","strand","mapq","polya_nt")
+
+  # First try reading as if a header exists
+  df <- suppressWarnings(
+    tryCatch(
+      read_tsv(path, col_types = cols(.default = col_character())),
+      error = function(e) NULL))
+
+  # If no expected column names are present, re-read as headerless and assign names
+  if (is.null(df) || length(intersect(expected, names(df))) == 0) {
+    df <- read_tsv(path, col_names = FALSE, col_types = cols(.default = col_character()))
+    # If we have at least 7 cols, name the first 7 as expected
+    if (ncol(df) >= 7) names(df)[1:7] <- expected
+  }
+
+  # Keep only the expected columns that exist
+  df <- dplyr::select(df, any_of(expected))
+
+  # Coerce types (non-numeric -> NA)
+  df <- mutate(
+    df,
+    pos = suppressWarnings(as.integer(pos)),
+    mapq = suppressWarnings(as.integer(mapq)),
+    polya_nt = suppressWarnings(as.integer(polya_nt)))
+
+  df
+}
+
+```
+
+
+```{r}
+W1118_Rep1_polA = read_tsv("~/Dropbox/all_files/dRNA/estimated_polyA_length/W1118_induro_mRNA_2025_102_m6A_DRACH.tsv", col_names = TRUE, col_types = cols(.default = col_character())) %>% filter(!is.na(polya_nt), polya_nt > 0, is.na(mapq) | mapq > 5, Location != "CDS", Location != "N/A", Location != "5'UTR") %>%
+  mutate(polya_nt = as.numeric(polya_nt), mapq = as.numeric(mapq))
+
+W1118_Rep2_polA = read_tsv("~/Dropbox/all_files/dRNA/estimated_polyA_length/W1118_Rep1_mRNA_m6A_DRACH.tsv", col_names = TRUE, col_types = cols(.default = col_character())) %>% filter(!is.na(polya_nt), polya_nt > 0, is.na(mapq) | mapq > 5, Location != "CDS", Location != "N/A", Location != "5'UTR")  %>%
+  mutate(polya_nt = as.numeric(polya_nt), mapq = as.numeric(mapq))
+
+W1118_Rep3_polA = read_tsv("~/Dropbox/all_files/dRNA/estimated_polyA_length/W1118_rep2_m6A_DRACH.tsv", col_names = TRUE, col_types = cols(.default = col_character())) %>% filter(!is.na(polya_nt), polya_nt > 0, is.na(mapq) | mapq > 5, Location != "CDS", Location != "N/A", Location != "5'UTR")  %>%
+  mutate(polya_nt = as.numeric(polya_nt), mapq = as.numeric(mapq))
+
+```
+
+
+
+```{r}
+FR1113N_Rep1_polA <- read_tsv("~/Dropbox/all_files/dRNA/estimated_polyA_length/FR113N_rep2_m6A_DRACH.tsv", col_names = TRUE, col_types = cols(.default = col_character())) %>% filter(!is.na(polya_nt), polya_nt > 0, is.na(mapq) | mapq > 5, Location != "CDS", Location != "N/A", Location != "5'UTR")  %>% mutate(polya_nt = as.numeric(polya_nt), mapq = as.numeric(mapq))
+
+
+FR1113N_Rep2_polA = read_tsv("~/Dropbox/all_files/dRNA/estimated_polyA_length/FR113N_rep3_m6A_DRACH.tsv", col_names = TRUE, col_types = cols(.default = col_character())) %>% filter(!is.na(polya_nt), polya_nt > 0, is.na(mapq) | mapq > 5, Location != "CDS", Location != "N/A", Location != "5'UTR") %>% mutate(polya_nt = as.numeric(polya_nt), mapq = as.numeric(mapq))
+
+
+FR1113N_Rep3_polA = read_tsv("~/Dropbox/all_files/dRNA/estimated_polyA_length/FR113N_Oct_4_mRNA_induro_pseU.tsv", col_names = TRUE, col_types = cols(.default = col_character())) %>% filter(!is.na(polya_nt), polya_nt > 0, is.na(mapq) | mapq > 5, Location != "CDS", Location != "N/A", Location != "5'UTR")  %>%
+  mutate(polya_nt = as.numeric(polya_nt), mapq = as.numeric(mapq))
+```
+
+
+```{r}
+Mettl3_Rep1_polA = read_tsv("~/Dropbox/all_files/dRNA/estimated_polyA_length/Mettl3_KO_mRNA_RNA004_m6A_DRACH.tsv", col_names = TRUE, col_types = cols(.default = col_character())) %>% filter(!is.na(polya_nt), polya_nt > 0, is.na(mapq) | mapq > 5, Location != "CDS", Location != "N/A", Location != "5'UTR")  %>%
+  mutate(polya_nt = as.numeric(polya_nt), mapq = as.numeric(mapq))
+
+Mettl3_Rep2_polA = read_tsv("~/Dropbox/all_files/dRNA/estimated_polyA_length/Mettl3_KO_mRNA_004_rep2_m6A_DRACH.tsv", col_names = TRUE, col_types = cols(.default = col_character())) %>% filter(!is.na(polya_nt), polya_nt > 0, is.na(mapq) | mapq > 5, Location != "CDS", Location != "N/A", Location != "5'UTR")  %>%
+  mutate(polya_nt = as.numeric(polya_nt), mapq = as.numeric(mapq))
+```
+
+```{r}
+
+combined <- bind_rows(
+  W1118_Rep1_polA %>% mutate(condition = "w1118", replicate = "Rep1"),
+  W1118_Rep2_polA %>% mutate(condition = "w1118", replicate = "Rep2"),
+  W1118_Rep3_polA %>% mutate(condition = "w1118", replicate = "Rep3"),
+
+  FR1113N_Rep1_polA %>% mutate(condition = "FR113N", replicate = "Rep1"),
+  FR1113N_Rep2_polA %>% mutate(condition = "FR113N", replicate = "Rep2"),
+  FR1113N_Rep3_polA %>% mutate(condition = "FR113N", replicate = "Rep3"),
+
+  Mettl3_Rep1_polA %>% mutate(condition = "Mettl3-KO", replicate = "Rep1"),
+  Mettl3_Rep2_polA %>% mutate(condition = "Mettl3-KO", replicate = "Rep2")) %>%
+  mutate(
+    condition = factor(condition, levels = c("w1118","FR113N","Mettl3-KO")),
+    replicate = factor(replicate, levels = c("Rep1","Rep2","Rep3")))
+
+# quick summary table (median + IQR) you can print or export
+summary_stats <- combined %>%
+  group_by(condition, replicate) %>%
+  summarise(n = n(),
+    median = median(polya_nt, na.rm = TRUE),
+    IQR = IQR(polya_nt, na.rm = TRUE),
+    mean = mean(polya_nt, na.rm = TRUE),
+    .groups = "drop")
+print(summary_stats)
+```
+
+Summarize poly(A) tail stats for all genes
+```{r}
+
+gene_stats_all <- combined %>%
+    filter(!is.na(Gene_ID), !is.na(polya_nt)) %>%
+    group_by(Gene_ID, condition, replicate) %>%
+    summarise(n = n(),
+        mean_polya = mean(polya_nt),
+        median_polya = median(polya_nt),
+        sd_polya = sd(polya_nt),
+        iqr_polya = IQR(polya_nt),
+        max_polya = max(polya_nt),
+        .groups = "drop") %>%
+    arrange(desc(n))
+
+print(gene_stats_all)
+```
+
+Add condition-wise breakdown (if needed)
+```{r}
+gene_stats_by_condition <- combined %>%
+  filter(!is.na(Gene_ID), !is.na(polya_nt)) %>%
+  group_by(Gene_ID, condition) %>%
+  summarise(n = n(),
+    mean_polya = mean(polya_nt),
+    median_polya = median(polya_nt),
+    iqr_polya = IQR(polya_nt),
+    .groups = "drop") %>%
+  arrange(Gene_ID, condition)
+```
+
+
+# Figure 5
+```{r}
+
+# Use already filtered + labeled data
+combined2 <- combined %>%
+  mutate(sample = paste(condition, replicate, sep = "_"))
+min_reads_per_gene_per_sample <- 5
+# Step 1: Per-gene stats per condition
+gene_condition <- combined2 %>%
+  filter(!is.na(Gene_ID), !is.na(polya_nt)) %>%
+  group_by(Gene_ID, condition) %>%
+  summarise(n = n(),
+            median_polya = median(polya_nt),
+            .groups = "drop")
+
+
+
+conditions <- sort(unique(gene_condition$condition))
+genes_ok <- gene_condition %>%
+  mutate(ok = n >= min_reads_per_gene_per_sample) %>%
+  tidyr::complete(Gene_ID, condition = conditions, fill = list(n = 0, ok = FALSE)) %>%
+  group_by(Gene_ID) %>%
+  summarise(ok_all = all(ok), .groups = "drop") %>%
+  filter(ok_all) %>%
+  pull(Gene_ID)
+
+heat_df <- gene_condition %>%
+  filter(Gene_ID %in% genes_ok) %>%
+  mutate(condition = factor(condition, levels = conditions))
+
+
+conditions <- sort(unique(gene_condition$condition))
+genes_ok <- gene_condition %>%
+  mutate(ok = n >= min_reads_per_gene_per_sample) %>%
+  tidyr::complete(Gene_ID, condition = conditions, fill = list(n = 0, ok = FALSE)) %>%
+  group_by(Gene_ID) %>%
+  summarise(ok_all = all(ok), .groups = "drop") %>%
+  filter(ok_all) %>%
+  pull(Gene_ID)
+
+heat_df <- gene_condition %>%
+  filter(Gene_ID %in% genes_ok) %>%
+  mutate(condition = factor(condition, levels = conditions))
+
+
+
+top10 <- gene_condition %>%
+  filter(Gene_ID %in% genes_ok) %>%
+  group_by(Gene_ID) %>%
+  summarise(total_n = sum(n), .groups = "drop") %>%
+  arrange(desc(total_n)) %>%
+  slice_head(n = 10) %>%
+  pull(Gene_ID)
+
+
+heat_df <- heat_df %>%
+  group_by(Gene_ID) %>%
+  mutate(z = (median_polya - mean(median_polya, na.rm = TRUE)) / sd(median_polya, na.rm = TRUE)) %>%
+  ungroup()
+
+
+order_genes <- heat_df %>%
+  group_by(Gene_ID) %>%
+  summarise(max_abs_z = max(abs(z), na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(max_abs_z)) %>%
+  pull(Gene_ID)
+
+
+
+heat_df <- heat_df %>%
+  mutate(Gene_ID = factor(Gene_ID, levels = order_genes),
+    highlight = Gene_ID %in% top10)
+
+
+p_heat <- ggplot(heat_df, aes(x = condition, y = Gene_ID, fill = z)) +
+  geom_tile() +
+  geom_tile(data = subset(heat_df, highlight), fill = NA, color = "black", linewidth = 0.25) +
+  scale_y_discrete(labels = function(l) ifelse(l %in% top10, l, "")) +
+  scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B", midpoint = 0, name = "z-score") +
+  labs(x = NULL, y = "Genes (highlighted = top 10 by reads)",title = "Per-gene median poly(A) length by condition", subtitle = "Replicates merged; z-scored within gene", family = "Times New Roman") +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x = element_text(hjust = 1, vjust = 1),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12),
+    panel.grid = element_blank(),
+    plot.margin = margin(5.5, 5.5, 12, 5.5))
+
+p_heat
+
+```
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+## 1) Safe z-scoring: if sd == 0, set z = 0 (no variation across conditions)
+heat_df_safe <- heat_df %>%
+  group_by(Gene_ID) %>%
+  mutate(mu = mean(median_polya, na.rm = TRUE),
+    s = sd(median_polya, na.rm = TRUE),
+    z = ifelse(is.finite(s) & s > 0, (median_polya - mu) / s, 0)) %>%
+  ungroup() %>%
+  dplyr::select(Gene_ID, condition, z)
+
+## 2) Build genes × conditions matrix
+zmat <- heat_df_safe %>%
+  pivot_wider(names_from = condition, values_from = z) %>%
+  arrange(Gene_ID)
+
+mat <- as.matrix(zmat[,-1])
+rownames(mat) <- zmat$Gene_ID
+
+## 3) Clean up non-finite entries
+# (a) if any NA remain, replace with row means; if an entire row is NA, set to 0 (or drop)
+if (anyNA(mat)) {
+  row_means <- rowMeans(mat, na.rm = TRUE)
+  # rows that are all NA → rowMeans = NA; set them to 0 (or drop them)
+  row_means[!is.finite(row_means)] <- 0
+  for (j in seq_len(ncol(mat))) {
+    nas <- is.na(mat[, j])
+    if (any(nas)) mat[nas, j] <- row_means[nas]
+  }
+}
+# (b) guard against any remaining non-finites
+mat[!is.finite(mat)] <- 0
+
+## 4) (Optional) Drop genes with no variation after cleanup
+keep_rows <- apply(mat, 1, function(x) sd(x) > 0)
+if (any(!keep_rows)) mat <- mat[keep_rows, , drop = FALSE]
+
+## 5) Cluster rows and columns (choose distance you prefer)
+# Euclidean + average linkage
+hc_rows <- hclust(dist(mat, method = "euclidean"), method = "average")
+hc_cols <- hclust(dist(t(mat), method = "euclidean"), method = "average")
+
+row_order <- rownames(mat)[hc_rows$order]
+col_order <- colnames(mat)[hc_cols$order]
+
+heat_df_fixed <- heat_df_safe %>%
+  mutate(condition = factor(as.character(condition), levels = c("w1118","FR113N","Mettl3-KO")))
+## 6) Relevel and plot with ggplot (clustered order)
+heat_df2 <- heat_df_fixed %>%
+  mutate(Gene_ID  = factor(Gene_ID, levels = row_order),
+    condition = factor(condition, levels = col_order),
+    highlight = Gene_ID %in% top10)
+
+
+p_heat <- ggplot(heat_df2, aes(x = condition, y = Gene_ID, fill = z)) +
+  geom_tile() +
+  geom_tile(data = subset(heat_df2, highlight), fill = NA, color = "black", linewidth = 0.25) +
+  scale_y_discrete(labels = function(l) ifelse(l %in% top10, l, "")) +
+  scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B", midpoint = 0, name = "z-score") +
+  labs(x = NULL, y = "Genes (highlighted = top 10 by reads)",
+       title = "Per-gene median poly(A) length (z) with clustered rows & columns",
+       subtitle = "Replicates merged; Euclidean / average linkage") +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+        plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        legend.position = "right")
+
+p_heat
+
+```
+
+
+
+```{r}
+library(ggplot2)
+library(forcats)
+
+cols <- c("w1118" = "#1b9e77", "FR113N" = "#d95f02", "Mettl3-KO" = "#7570b3")
+
+# ---- Summaries per condition (replicates merged) ----
+sum_cond <- combined %>%
+  filter(!is.na(polya_nt)) %>%
+  group_by(condition) %>%
+  summarise(n = n(),
+    median = median(polya_nt),
+    q1 = quantile(polya_nt, 0.25),
+    q3 = quantile(polya_nt, 0.75),
+    .groups = "drop")
+
+y_max <- quantile(combined$polya_nt, 0.99, na.rm = TRUE)
+
+# ---- Bar plot: median ± IQR per condition ----
+p_bar <- ggplot(sum_cond, aes(x = condition, y = median, fill = condition)) +
+  geom_col(width = 0.3, colour = NA) +
+  geom_errorbar(aes(ymin = q1, ymax = q3), width = 0.18, linewidth = 0.6) +
+  geom_text(aes(label = paste0("n = ", scales::comma(n))), vjust = -0.7, size = 3.2, family = "Times New Roman") +
+  scale_fill_manual(values = cols, guide = "none") +
+  coord_cartesian(ylim = c(0, y_max)) +
+  labs(x = NULL, y = "Estimated poly(A) length (nt)",
+    title = "Poly(A) tail length per condition (median ± IQR)") +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12))
+
+p_bar
+```
+
+
+```{r}
+# Per-read comparison (current approach)
+pairwise.wilcox.test(combined$polya_nt, combined$condition, p.adjust.method = "BH")
+
+# Effect sizes (robust, per-read)
+library(effsize)
+#effsize::cliff.delta(polya_nt ~ condition, data = combined)
+
+# Gene-balanced version: per-gene median then compare
+gene_meds <- combined %>%
+  filter(!is.na(Gene_ID)) %>%
+  group_by(condition, Gene_ID) %>%
+  summarise(med = median(polya_nt), .groups = "drop")
+
+pairwise.wilcox.test(gene_meds$med, gene_meds$condition, p.adjust.method = "BH")
+
+```
+
+
+# selected genes with different polyA lengths
+```{r}
+library(dplyr)
+library(forcats)
+library(ggplot2)
+library(ggdist)
+
+genes_to_plot <- c("ninaE", "Adh", "nrv3", "Yp2")
+n_show <- 6
+
+gene_stats <- gene_condition %>%
+  filter(Gene_ID %in% genes_ok) %>%
+  group_by(Gene_ID) %>%
+  summarise(total_n = sum(n), .groups = "drop")
+
+if (length(genes_to_plot) > 0) {
+  top_genes <- gene_stats %>%
+    filter(Gene_ID %in% genes_to_plot) %>%
+    pull(Gene_ID)
+} else {
+  top_genes <- gene_stats %>%
+    arrange(desc(total_n)) %>%
+    slice_head(n = n_show) %>%
+    pull(Gene_ID)
+}
+
+
+plot_df <- combined %>%
+  filter(Gene_ID %in% top_genes, !is.na(polya_nt)) %>%
+  mutate(condition = forcats::fct_relevel(condition, "w1118", "FR113N", "Mettl3-KO"))
+
+counts_gc <- plot_df %>%
+  count(Gene_ID, condition) %>%
+  group_by(Gene_ID) %>%
+  mutate(label = paste0("n = ", scales::comma(n))) %>%
+  ungroup()
+
+
+p_top_rain <- ggplot(plot_df, aes(x = condition, y = polya_nt, fill = condition, color = condition)) +
+  ggdist::stat_halfeye(adjust = 0.5, width = 0.6, .width = 0, justification = -0.3, point_colour = NA,  side = "right") +
+  geom_boxplot(width = 0.15,outlier.shape = NA, alpha = 0.9, fill = "white", colour = "black", position = position_nudge(x = 0.15)) +
+  geom_text(data = counts_gc, aes(x = condition, y = -Inf, label = label), vjust = -0.6, size = 3.1, family = "Times New Roman", inherit.aes = FALSE) +
+  facet_wrap(~ Gene_ID, scales = "free_y") +
+  scale_fill_manual(values = cols, guide = "none") +
+  scale_color_manual(values = cols, guide = "none") +
+  labs(x = NULL,y = "Estimated poly(A) length (nt)", title = "Poly(A) length per condition (raincloud plot)") +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    strip.text = element_text(face = "bold"),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    plot.margin = margin(5.5, 5.5, 14, 5.5)) +
+  coord_cartesian(clip = "off")
+
+p_top_rain
+
+```
+
+For a given gene and pair of conditions, the null hypothesis is:
+
+H₀: the two conditions come from the same distribution of polyA lengths
+(i.e. there is no real difference in polyA tail length for this gene between those two genotypes).
+
+The test looks at the ranks of all polyA lengths in the two groups and asks: “If the distributions were truly identical, how extreme is the separation we see between the groups?”
+
+```{r}
+library(dplyr)
+library(ggsignif)
+
+
+comparisons <- list(c("w1118","FR113N"), c("w1118","Mettl3-KO"), c("FR113N","Mettl3-KO"))
+
+
+p_stars <- function(p) {
+  ifelse(p <= 1e-4, "****",
+  ifelse(p <= 1e-3, "***",
+  ifelse(p <= 0.01, "**",
+  ifelse(p <= 0.05, "*", "ns"))))
+}
+
+
+signif_df <- plot_df %>%
+  group_by(Gene_ID) %>%
+  do({
+    dat <- .
+    y_base <- quantile(dat$polya_nt, 0.99, na.rm = TRUE)
+    step <- 0.06 * y_base
+    tibble::tibble(group1 = sapply(comparisons, `[`, 1), group2 = sapply(comparisons, `[`, 2),
+      p = sapply(comparisons, function(cc)
+        wilcox.test(polya_nt ~ condition, data = dplyr::filter(dat, condition %in% cc))$p.value),
+      y_position = y_base + step * seq_along(comparisons))
+  }) %>%
+  ungroup() %>%
+  mutate(p_adj = p.adjust(p, method = "BH"),
+         annotations = p_stars(p_adj))
+
+# --- add to your existing plot `p_top` ---
+p_top_sig <- p_top_rain +
+  ggsignif::geom_signif(data = signif_df,aes(xmin = group1, xmax = group2, annotations = annotations, y_position = y_position), manual = TRUE, inherit.aes = FALSE, tip_length = 0.01, textsize = 6, vjust = 0.5)
+
+p_top_sig
+# ggsave("polyA_violin_box_top_genes_merged_sig.pdf", p_top_sig,
+#        width = 7.5, height = 4.5, dpi = 300, device = cairo_pdf)
+
+```
+
+
+```{r}
+
+cols <- c("w1118" = "#1b9e77", "FR113N" = "#d95f02", "Mettl3-KO" = "#7570b3")
+
+ecdf_plot <- ggplot(
+  combined %>% filter(!is.na(polya_nt)),
+  aes(x = polya_nt, color = condition)) +
+  stat_ecdf(geom = "step") +
+  scale_color_manual(values = cols, name = "Condition") +
+  coord_cartesian(xlim = c(0, 300)) +
+  labs(x = "poly(A) length (nt)", y = "ECDF", title = "Global poly(A) distributions") +
+  theme_classic()
+
+
+ecdf_plot
+```
+
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# ---- 0) prep: one column per sample ----
+combined2 <- combined %>%
+  mutate(sample = paste(condition, replicate, sep = "_")) %>%
+  filter(!is.na(Gene_ID), !is.na(polya_nt))
+
+# parameters
+min_reads_per_gene_per_sample <- 5
+top_k <- 25  # how many genes to show
+
+# ---- 1) per-gene, per-sample stats ----
+gene_sample <- combined2 %>%
+  group_by(Gene_ID, sample, condition) %>%
+  summarise(n = n(),
+            median_polya = median(polya_nt),
+            .groups = "drop")
+
+all_samples <- sort(unique(gene_sample$sample))
+
+# keep genes observed (>= min reads) in *all* samples
+shared_genes <- gene_sample %>%
+  mutate(ok = n >= min_reads_per_gene_per_sample) %>%
+  complete(Gene_ID, sample = all_samples, fill = list(n = 0, ok = FALSE)) %>%
+  group_by(Gene_ID) %>%
+  summarise(ok_all = all(ok), .groups = "drop") %>%
+  filter(ok_all) %>% pull(Gene_ID)
+
+heat_df <- gene_sample %>%
+  filter(Gene_ID %in% shared_genes) %>%
+  mutate(sample = factor(sample, levels = all_samples))
+
+# ---- 2) choose "top" shared genes ----
+# A) by total reads (most abundant)
+top_genes_reads <- heat_df %>%
+  group_by(Gene_ID) %>% summarise(total_n = sum(n), .groups="drop") %>%
+  slice_max(total_n, n = top_k) %>% pull(Gene_ID)
+
+# B) by variability across samples (largest IQR of medians)
+top_genes_var <- heat_df %>%
+  group_by(Gene_ID) %>% summarise(iqr_med = IQR(median_polya), .groups="drop") %>%
+  slice_max(iqr_med, n = top_k) %>% pull(Gene_ID)
+
+# C) by KO–WT shift (average across replicates)
+#    (requires 'condition' in heat_df; adjust condition names if needed)
+cond_meds <- heat_df %>%
+  group_by(Gene_ID, condition) %>%
+  summarise(med = median(median_polya), .groups="drop") %>%
+  pivot_wider(names_from = condition, values_from = med)
+top_genes_shift <- cond_meds %>%
+  mutate(delta_KO_WT = `Mettl3-KO` - w1118) %>%
+  arrange(desc(abs(delta_KO_WT))) %>%
+  slice_head(n = top_k) %>% pull(Gene_ID)
+
+# >>> pick one of the three:
+top_genes <- top_genes_reads      # or: top_genes_var / top_genes_shift
+
+heat_sel <- heat_df %>% filter(Gene_ID %in% top_genes)
+
+# Optional: z-score within gene (emphasize relative shifts)
+heat_z <- heat_sel %>%
+  group_by(Gene_ID) %>%
+  mutate(z = (median_polya - mean(median_polya)) / sd(median_polya)) %>%
+  ungroup()
+
+# Order genes for readability (by KO–WT shift if available, else by total reads)
+order_genes <- cond_meds %>%
+  filter(Gene_ID %in% top_genes) %>%
+  mutate(delta_KO_WT = `Mettl3-KO` - w1118) %>%
+  arrange(delta_KO_WT) %>% pull(Gene_ID)
+if (length(order_genes) == 0) {
+  order_genes <- heat_sel %>% group_by(Gene_ID) %>% summarise(total_n = sum(n)) %>%
+    arrange(desc(total_n)) %>% pull(Gene_ID)
+}
+heat_z$Gene_ID <- factor(heat_z$Gene_ID, levels = unique(order_genes))
+
+# ---- 3) plot: z-score version (relative) ----
+p_z <- ggplot(heat_z, aes(x = sample, y = Gene_ID, fill = z)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B",
+                       midpoint = 0, name = "z-score") +
+  labs(x = NULL, y = "Top shared genes",
+       title = "Per-gene median poly(A) by sample (top shared genes)",
+       subtitle = "") +
+  theme_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+p_z
+
+# ---- 4) plot: absolute medians (nt) version ----
+p_abs <- ggplot(heat_sel %>% mutate(Gene_ID = factor(Gene_ID, levels = levels(heat_z$Gene_ID))),
+                aes(x = sample, y = Gene_ID, fill = median_polya)) +
+  geom_tile() +
+  scale_fill_viridis_c(name = "median (nt)") +
+  labs(x = NULL, y = "Top shared genes",
+       title = "Per-gene median poly(A) by sample (top shared genes)",
+       subtitle = "Absolute medians (nt)") +
+  theme_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+p_abs
+
+```
+
+
+# Patch Fig 4
+```{r}
+library(patchwork)
+
+Fig4 <- (p_bar |ecdf_plot) / (p_top_sig)| p_heat +
+  plot_annotation(title = NULL, tag_levels = "A",
+    theme = theme(plot.title = element_text(size = 12, family = "Times New Roman"))) &
+  theme(text= element_text(size = 12, family = "Times New Roman"), axis.title  = element_text(size = 12), axis.text = element_text(size = 12), strip.text = element_text(size = 12), legend.text = element_text(size = 12), legend.title= element_text(size = 12))
+Fig4
+
+#ggsave("~/Dropbox/dRNA_manuscript_Figs/Fig4_polyA_tail_distributions.pdf", Fig4, width = 15, height = 10, dpi = 300, device = cairo_pdf)
+```
+
+
+
+
+# Statistical comparison of poly(A) distributions
+Interpretation (with caveats).
+These plots suggest global poly(A) shortening in Mettl3-KO relative to W1118 and FR113N. If METTL3 loss reduces m6A, one might expect altered deadenylation dynamics; the data are consistent with shorter steady-state tails in the KO. However, direct RNA tail estimates can be influenced by sample quality, basecalling, and run-specific factors, so confirm with stats and QC before making a strong biological claim.
+```{r}
+# per-condition/replicate summaries
+library(dplyr)
+summary_stats <- combined %>%
+  group_by(condition, replicate) %>%
+  summarise(n=n(),
+            median=median(polya_nt), mean=mean(polya_nt),
+            IQR=IQR(polya_nt), p95=quantile(polya_nt, 0.95),
+            .groups="drop")
+summary_stats
+
+```
+
+```{r}
+# nonparametric tests (downsample to balance if n differs a lot)
+set.seed(1)
+balanced <- combined %>% group_by(condition, replicate) %>% sample_n(min(5e4, n()))
+# overall difference among conditions
+kruskal.test(polya_nt ~ condition, data = balanced)
+# pairwise (Benjamini–Hochberg)
+pairwise.wilcox.test(balanced$polya_nt, balanced$condition, p.adjust.method = "BH")
+
+```
+
+
+```{r}
+balanced <- combined %>%
+  mutate(polya_nt = as.double(polya_nt)) %>%
+  group_by(condition) %>%
+  sample_n(min(n(), 50000)) %>%
+  ungroup()
+
+# rank tests with numeric
+kruskal.test(polya_nt ~ condition, data = balanced)
+pairwise.wilcox.test(balanced$polya_nt, balanced$condition, p.adjust.method = "BH")
+
+# Cliff's delta on numeric
+library(effsize)
+with(balanced, cliff.delta(polya_nt[condition=="w1118"],   polya_nt[condition=="Mettl3-KO"]))
+with(balanced, cliff.delta(polya_nt[condition=="FR113N"],  polya_nt[condition=="Mettl3-KO"]))
+
+```
+
+
+```{r}
+W1118_vs_Mettl3_KO_a_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/W1118_vs_Mettl3_KO_a_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Gene_ID,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+W1118_vs_Mettl3_m_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/W1118_vs_Mettl3_m_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Gene_ID,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+W1118_vs_Mettl3_psi_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/W1118_vs_Mettl3_psi_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Gene_ID,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+FR1113_vs_Mettl3_KO_a_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/FR1113_vs_Mettl3_KO_a_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Gene_ID,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+FR1113_vs_Mettl3_KO_m_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/FR1113_vs_Mettl3_KO_m_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Gene_ID,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+FR1113_vs_Mettl3_KO_psi_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/FR1113_vs_Mettl3_KO_psi_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Gene_ID,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+
+FR113_vs_w1118_a_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/FR113_vs_w1118_a_dmr.txt")%>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Gene_ID,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+FR113_vs_w1118_m_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/FR113_vs_w1118_m_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Gene_ID,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+FR113_vs_w1118_psi_dmr <- read_tsv("~/Dropbox/dRNA_manuscript_Figs/dmr/FR113_vs_w1118_psi_dmr.txt") %>% 
+dplyr::select(-c(name,	score,	strand,	a_counts,	a_total,	b_counts,	b_total,	a_mod_percentages,	b_mod_percentages,	a_pct_modified,	b_pct_modified,	effect_size,	cohen_h,	cohen_h_low,	cohen_h_high,	Gene_ID,	Transcript_IDs,	Transcript_Biotype,	Location))
+
+
+Mettl3_FR113_PAS = read.delim("~/Dropbox/dRNA_manuscript_Figs/dmr/dRNA_3UTR_Mettl3_FR113_PAS_data.txt", sep = "\t")
+
+Mettl3_w1118_PAS = read.delim("~/Dropbox/dRNA_manuscript_Figs/dmr/dRNA_3UTR_Mettl3_w1118_PAS_data.txt",sep = "\t")
+
+FR113_w1118_PAS =read.delim("~/Dropbox/dRNA_manuscript_Figs/dmr/dRNA_3UTR_FR113_w1118_PAS_data.txt", sep = "\t")
+
+```
+
+
+in steady-state RNA, poly(A) tail length is a proxy for “lifespan and readiness” of an mRNA.
+
+Longer tails (tens→hundreds nt) generally mean newer or more translation-competent transcripts. PABP binding on long tails promotes translation initiation and protects against decay. Cytoplasmic polyadenylation (for some mRNAs) can also re-activate translation.
+
+Shorter tails (few→~30–60 nt) indicate progressive deadenylation, the first step toward decapping/3′→5′ decay. Short tails typically correspond to older/less translationally active RNAs and faster turnover.
+
+In our data:
+
+W1118 ≈ FR113N (medians ~61–89 nt) → broadly similar mRNA maturation/turnover state.
+
+Mettl3-KO is modestly shorter overall (small but consistent left-shift). Biologically this is compatible with faster deadenylation / older steady-state mRNAs in the KO. It could reflect:
+
+changes in deadenylase activity or recruitment (even without m6A, other pathways—AU-rich elements, miRNA/CCR4-NOT—can accelerate deadenylation);
+
+a shift in transcript mix toward genes whose tails are naturally shorter (e.g., mitochondrial/nucleolar/housekeeping RNAs);
+
+reduced translation/PABP occupancy, which can permit faster tail trimming.
+
+Important caveats (why a small global shift can still be real, but needs context):
+
+dRNA poly(A) is a steady-state mixture across genes/isoforms; a small global effect can hide large gene-specific changes.
+
+Replicate/batch differences exist (W1118 Rep1 ≫ Rep2/Rep3). Library quality, pore performance, and read composition (e.g., mitochondrial mRNAs often have short tails) can nudge distributions.
+
+The Dorado pt estimates are good for trends but still have estimation noise; keep unmapped reads with pt>0 but check consistency across your three BAM flavors.
+
+What to do next to pin down the biology:
+
+Per-gene / pathway view: compute median tail per gene and test KO vs WT; run GO/GSEA on transcripts with the largest tail shortening.
+
+Separate nuclear vs mitochondrial mRNAs and other biotypes; plot distributions per class.
+
+Relate tail length to abundance: scatter (tail median vs expression) to see if KO shortens tails preferentially on highly expressed or specific pathways.
+
+Mixed-effects modeling: tail ~ condition + (1|replicate) (on per-read or per-gene medians) to separate condition from batch.
+
+3' UTR/APA stratification: different poly(A) sites can have different tail dynamics; check if KO shifts APA usage.
+
+QC: % reads with pt<=0, read length/quality distributions, and consistency of tail calls across m6A/m5C/pseU BAMs.
+
+
+
+```{r}
+
+#fasta <- "~/Dropbox/all_files/new_peak_files_java/all_macs2_call_diff_star_mapped/dm6.fasta"   # <- change to your reference
+#fa <- FaFile(fasta); open(fa)
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+library(GenomicRanges)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(tibble)
+
+to_gr <- function(df) {
+  GRanges(seqnames = df$chrom, ranges = IRanges(start = as.integer(df$start), end  = as.integer(df$end)))
+}
+
+pas_to_gr <- function(df) {
+  st <- if ("strand" %in% names(df)) df$strand else "*"
+  st[is.na(st)] <- "*"
+  GRanges(seqnames = df$chrom, ranges = IRanges(start = as.integer(df$start), end = as.integer(df$end)), strand = st)
+}
+
+nearest_dist_unsigned <- function(mod_gr, pas_gr) {
+  idx <- nearest(mod_gr, pas_gr, ignore.strand = TRUE)
+  keep <- !is.na(idx)
+  if (!any(keep)) return(numeric(0))
+  distance(mod_gr[keep], pas_gr[idx[keep]])
+}
+
+nearest_dist_signed <- function(mod_gr, pas_gr) {
+  idx <- nearest(mod_gr, pas_gr, ignore.strand = FALSE)
+  keep <- !is.na(idx)
+  if (!any(keep)) return(numeric(0))
+  mod_mid <- floor((start(mod_gr) + end(mod_gr)) / 2)[keep]
+  pas_pos <- start(pas_gr)[idx[keep]]
+  pas_str <- as.character(strand(pas_gr))[idx[keep]]
+  dir <- ifelse(pas_str == "+", 1L,
+         ifelse(pas_str == "-", -1L, NA_integer_))
+  (mod_mid - pas_pos) * dir
+}
+
+## Build a long table of distances for one comparison
+build_distances <- function(label, psi_df, m_df, a_df, pas_df) {
+  psi_gr <- to_gr(psi_df); m5C_gr <- to_gr(m_df); m6A_gr <- to_gr(a_df)
+  pas_gr <- pas_to_gr(pas_df)
+
+  tibble(modification = c(rep("Psi", length(nearest_dist_unsigned(psi_gr, pas_gr))),
+                     rep("m5C", length(nearest_dist_unsigned(m5C_gr, pas_gr))),
+                     rep("m6A", length(nearest_dist_unsigned(m6A_gr, pas_gr)))),
+    distance_unsigned = c(nearest_dist_unsigned(psi_gr, pas_gr),
+                          nearest_dist_unsigned(m5C_gr, pas_gr),
+                          nearest_dist_unsigned(m6A_gr, pas_gr)),
+    distance_signed   = c(nearest_dist_signed(psi_gr, pas_gr),
+                          nearest_dist_signed(m5C_gr, pas_gr),
+                          nearest_dist_signed(m6A_gr, pas_gr))) %>%
+    mutate(comparison = label, modification = factor(modification, levels = c("Psi","m6A","m5C")))
+}
+
+##
+# 1) FR113 vs w1118 with FR113_w1118 PAS
+df1 <- build_distances(
+  "FR113N_vs_w1118",
+  FR113_vs_w1118_psi_dmr,
+  FR113_vs_w1118_m_dmr,
+  FR113_vs_w1118_a_dmr,
+  FR113_w1118_PAS)
+
+# 2) FR1113 vs Mettl3_KO with Mettl3_FR113 PAS
+# (If your object is actually FR113_vs_Mettl3_KO_*, rename here.)
+df2 <- build_distances(
+  "FR1113N_vs_Mettl3-KO",
+  FR1113_vs_Mettl3_KO_psi_dmr,
+  FR1113_vs_Mettl3_KO_m_dmr,
+  FR1113_vs_Mettl3_KO_a_dmr,
+  Mettl3_FR113_PAS)
+
+# 3) W1118 vs Mettl3 with Mettl3_w1118 PAS
+df3 <- build_distances(
+  "W1118_vs_Mettl3-KO",
+  W1118_vs_Mettl3_psi_dmr,
+  W1118_vs_Mettl3_m_dmr,
+  W1118_vs_Mettl3_KO_a_dmr,
+  Mettl3_w1118_PAS)
+
+dist_all <- bind_rows(df1, df2, df3)
+pal <- c(Psi = "#FF4500", m6A = "#66a61e", m5C = "#7570b3")
+
+# Unsigned (how close), facet by comparison
+p_unsigned <- ggplot(dist_all, aes(x = distance_unsigned, color = modification)) +
+  geom_density(size = 1) +
+  labs(title = "Density of Distances from mod sites to Nearest PAS",x = "Distance to PAS (nt)", y = "Density", family = "Times New Roman") +
+  theme_minimal() +
+  scale_x_continuous(limits = c(-500, 500)) +
+  theme_classic(base_size = 13) +
+   facet_wrap(~comparison, scales = "free_y") +
+  theme(axis.text.x = element_text(hjust = 1), axis.text.y = element_text(size = 10), plot.title = element_text(face = "bold", hjust = 0.5)) +
+  scale_color_manual(values = pal) +
+  scale_fill_manual(values = pal) + geom_vline(xintercept = 0, linetype = 2) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+print(p_unsigned)
+
+# Signed (directionality), facet by comparison
+p_signed <- ggplot(dist_all, aes(x = distance_signed, color = modification)) +
+  geom_density(size = 1) +
+  labs(title = "Density of Distances from mod sites to Nearest PAS",x = "Distance to PAS (nt)", y = "Density", family = "Times New Roman") +
+  theme_minimal() +
+  scale_x_continuous(limits = c(-500, 500)) +
+  theme_classic(base_size = 13) +
+   facet_wrap(~comparison, scales = "free_y") + geom_vline(xintercept = 0, linetype = 2) +
+  theme(axis.text.x = element_text(hjust = 1), axis.text.y = element_text(size = 10), plot.title = element_text(face = "bold", hjust = 0.5)) +
+  scale_color_manual(values = pal) +
+  scale_fill_manual(values = pal) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+print(p_signed)
+
+##roximity table per comparison
+prox_summary <- dist_all %>%
+  mutate(abs_signed = abs(distance_signed)) %>%
+  group_by(comparison, modification) %>%
+  summarise(n = n(),
+            median_unsigned = median(distance_unsigned),
+            `frac_≤50` = mean(distance_unsigned <= 50),
+            `frac_≤100` = mean(distance_unsigned <= 100),
+            `frac_≤250` = mean(distance_unsigned <= 250),
+            frac_upstream = mean(distance_signed < 0, na.rm = TRUE),
+            .groups = "drop")
+print(prox_summary)
+
+# Optional saves:
+# ggsave("faceted_unsigned.pdf", p_unsigned, width = 8, height = 5)
+# ggsave("faceted_signed.pdf", p_signed,   width = 8, height = 5)
+# write.csv(prox_summary, "faceted_proximity_summary.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+
+library(GenomicRanges)
+library(Biostrings)
+library(Rsamtools)
+library(dplyr)
+library(tibble)
+
+
+## lets load FASTA ---
+fasta <- "~/Dropbox/all_files/new_peak_files_java/all_macs2_call_diff_star_mapped/dm6.fasta"
+fa <- FaFile(fasta); open(fa)
+fa_idx <- scanFaIndex(fa)               # to get seqlengths/seqinfo
+
+
+pas_to_gr <- function(df) {
+  stopifnot(all(c("chrom","start","end") %in% names(df)))
+  st <- if ("strand" %in% names(df)) df$strand else "*"
+  st[is.na(st)] <- "*"
+  GRanges(seqnames = df$chrom,
+          ranges = IRanges(start = as.integer(df$start), end = as.integer(df$end)),
+          strand = st)
+}
+
+extract_centered_kmer <- function(pas_df, fa, label, k = 6) {
+  gr0 <- pas_to_gr(pas_df)
+  seqinfo(gr0) <- seqinfo(fa_idx)[seqlevels(gr0)]  # attach lengths if present
+  # 5-mer centered on PAS, strand-aware
+  gr5 <- resize(gr0, width = k, fix = "center")
+  gr5 <- trim(gr5)  # drop/clamp any ranges at sequence ends
+
+  # fetch sequences (then reverse-complement minus strand explicitly)
+  seqs <- getSeq(fa, gr5)
+  minus <- as.character(strand(gr5)) == "-"
+  if (any(minus, na.rm = TRUE)) seqs[minus] <- reverseComplement(seqs[minus])
+
+  # build names for FASTA entries
+  nm <- sprintf("%s|%s:%d-%d(%s)%s",
+                label,
+                as.character(seqnames(gr5)),
+                start(gr5), end(gr5),
+                as.character(strand(gr5)),
+                if ("name" %in% names(mcols(gr0))) paste0("|", mcols(gr0)$name) else "")
+
+  names(seqs) <- nm
+
+  # write FASTA
+  out_fa <- paste0(label, "_PAS_5mer.fa")
+  writeXStringSet(seqs, filepath = out_fa, compress = FALSE)
+
+  # return a tidy table as well
+  df <- tibble(label = label, chrom = as.character(seqnames(gr5)), start = start(gr5), end = end(gr5), strand = as.character(strand(gr5)), seq5 = as.character(seqs))
+  list(gr = gr5, seqs = seqs, df = df, fasta = out_fa)
+}
+
+## Run for three PAS sets
+res_Mettl3_FR113 <- extract_centered_kmer(Mettl3_FR113_PAS, fa, "Mettl3-KO_FR113N")
+res_FR113_w1118 <- extract_centered_kmer(FR113_w1118_PAS, fa, "FR113N_w1118")
+res_Mettl3_w1118 <- extract_centered_kmer(Mettl3_w1118_PAS, fa, "Mettl3-KO_w1118")
+
+# Combined table if you want everything together:
+pas_5mer_all <- bind_rows(res_Mettl3_FR113$df, res_FR113_w1118$df, res_Mettl3_w1118$df)
+
+# Check outputs
+res_Mettl3_FR113$fasta
+res_FR113_w1118$fasta
+res_Mettl3_w1118$fasta
+head(pas_5mer_all)
+
+```
+
+AAUAAA (orange): Clear bump concentrated upstream of 0, with the highest counts very near the PAS and a broad shoulder from about −30 to −10 nt. That’s where the polyadenylation signal is expected in many metazoans.
+
+UGUA (purple): Counts are relatively flat across −50…+50 nt, i.e., no strong positional enrichment near the PAS in these datasets.
+
+Across facets: The same qualitative pattern appears for FR113_vs_w1118, Mettl3-KO_vs_FR113N, and Mettl3-KO_vs_w1118 → no major condition-specific shift in motif positioning.
+
+Caveats / fine points
+
+You’re plotting motif start positions; the spike right before 0 can partly reflect using the start rather than the motif center. It won’t change the conclusion.
+
+You searched only exact AAUAAA and UGUA. Many PASs use close hexamer variants (e.g., AUUAAA, AAGAAA, AAUACA). Including these typically increases the upstream peak and explains AAUAAA-negative PASs.
+
+UGUA (CFIm site) can act further upstream (often tens to >100 nt in mammals). With a ±50-nt window, you might miss distal enrichment.
+
+Quick follow-ups (if you want to firm it up)
+
+Scan common hexamer variants (allow 1 mismatch) and re-plot positions.
+
+Extend the window (e.g., −150…+50 nt) to reassess UGUA.
+
+Quantify per-set fractions:
+
+% PAS with AAUAAA (or variant) within −10…−40 nt.
+
+Median/mean nearest-motif position.
+
+Compare counts to a shuffled background to report enrichment (odds ratios or z-scores).
+
+Conclusion: PASs in your data are enriched for the canonical AAUAAA signal in the expected upstream window; UGUA shows no strong positional enrichment near the cleavage site within ±50 nt, and these features are stable across your conditions
+
+```{r}
+library(GenomicRanges)
+library(Biostrings)
+library(Rsamtools)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(purrr)
+
+pas_to_gr <- function(df) {
+  stopifnot(all(c("chrom","start","end") %in% names(df)))
+  st <- if ("strand" %in% names(df)) df$strand else "*"
+  st[is.na(st)] <- "*"
+  GRanges(seqnames = df$chrom, ranges = IRanges(start = as.integer(df$start), end = as.integer(df$end)), strand = st)
+}
+
+# Extract a strand-aware window around PAS and return RNA-oriented sequences
+extract_pas_window <- function(pas_df, fa, up = 50, down = 50) {
+  pas_gr <- pas_to_gr(pas_df)
+
+  # Make a centered window of width up + 1 + down
+  w <- up + 1 + down
+  win_gr <- resize(pas_gr, width = w, fix = "center")
+  win_gr <- trim(win_gr)  # clamp at contig ends
+
+  # Fetch DNA sequences then orient to transcript (reverse-complement minus)
+  dna <- getSeq(fa, win_gr)
+  minus <- as.character(strand(win_gr)) == "-"
+  if (any(minus, na.rm = TRUE)) dna[minus] <- reverseComplement(dna[minus])
+
+  # Convert T->U so we can search RNA motifs directly
+  rna <- RNAStringSet(dna)
+
+  list(win_gr = win_gr, rna = rna, up = up, down = down, width = w)
+}
+
+# Find motif matches and return per-PAS tidy rows with positions relative to PAS (0)
+scan_motifs <- function(rna, up, down, label) {
+  center_idx <- up + 1L  # 1-based index of PAS base in the window
+
+  # Patterns (RNA alphabet)
+  pat_AAUAAA <- RNAString("AAUAAA")
+  pat_UGUA   <- RNAString("UGUA")
+
+  # Vectorized match per sequence
+  hits_AAUAAA <- vmatchPattern(pat_AAUAAA, rna)
+  hits_UGUA   <- vmatchPattern(pat_UGUA, rna)
+
+  # helper to convert matches to a tibble of relative starts
+  hits_to_df <- function(hits, motif) {
+    # hits is a CompressedIRangesList, one element per PAS
+    map2_dfr(seq_along(hits), hits, function(i, ir) {
+      if (length(ir) == 0) return(tibble(idx = i, motif = motif, rel_start = integer(0)))
+      tibble(idx = i, motif = motif, rel_start = start(ir) - center_idx)
+    })
+  }
+
+  df_AAUAAA <- hits_to_df(hits_AAUAAA, "AAUAAA")
+  df_UGUA <- hits_to_df(hits_UGUA,"UGUA")
+  df_hits <- bind_rows(df_AAUAAA, df_UGUA)
+
+  # Per-PAS summary flags and nearest positions
+  per_pas <- tibble(idx = seq_along(rna),
+                    has_AAUAAA = lengths(hits_AAUAAA) > 0,
+                    has_UGUA   = lengths(hits_UGUA)   > 0) %>%
+    left_join(df_hits %>% group_by(idx, motif) %>%
+        summarise(nearest_rel_pos = rel_start[which.min(abs(rel_start))],
+                  .groups = "drop") %>%
+        pivot_wider(names_from = motif, values_from = nearest_rel_pos, names_prefix = "nearest_"),
+      by = "idx") %>%
+    mutate(label = label)
+
+  list(hits_long = df_hits %>% mutate(label = label),
+       per_pas   = per_pas)
+}
+
+# Run full pipeline for one PAS table
+find_pas_motifs <- function(pas_df, fa, label, up = 50, down = 50) {
+  ext <- extract_pas_window(pas_df, fa, up, down)
+  scans <- scan_motifs(ext$rna, ext$up, ext$down, label)
+
+  # Build a table with genomic coordinates + sequences
+  coords <- tibble(
+    label = label,
+    idx = seq_along(ext$rna),
+    chrom = as.character(seqnames(ext$win_gr)),
+    start = start(ext$win_gr),
+    end = end(ext$win_gr),
+    strand = as.character(strand(ext$win_gr)),
+    window_seq_RNA = as.character(ext$rna))
+
+  list(
+    hits_long = scans$hits_long,     # per-match (idx, motif, rel_start)
+    per_pas = left_join(coords, scans$per_pas, by = c("label","idx")),
+    window_gr = ext$win_gr)
+}
+
+##Run on your three PAS sets
+res_FR113 <- find_pas_motifs(Mettl3_FR113_PAS, fa, "Mettl3-KO_vs_FR113N", up = 50, down = 50)
+res_FR113W <- find_pas_motifs(FR113_w1118_PAS, fa, "FR113_vs_w1118", up = 50, down = 50)
+res_W1118 <- find_pas_motifs(Mettl3_w1118_PAS, fa, "Mettl3-KO_vs_w1118",up = 50, down = 50)
+
+# Tidy outputs you can inspect / plot
+motif_hits_all <- bind_rows(res_FR113$hits_long, res_FR113W$hits_long, res_W1118$hits_long)
+per_pas_all <- bind_rows(res_FR113$per_pas, res_FR113W$per_pas, res_W1118$per_pas)
+
+##summaries
+summary_tbl <- per_pas_all %>%
+  group_by(label) %>%
+  summarise(n = n(),
+    frac_with_AAUAAA = mean(has_AAUAAA),
+    frac_with_UGUA = mean(has_UGUA),
+    # proximity of nearest motif (if present)
+    median_nearest_AAUAAA = median(nearest_AAUAAA, na.rm = TRUE),
+    median_nearest_UGUA = median(nearest_UGUA, na.rm = TRUE),
+    .groups = "drop")
+print(summary_tbl)
+
+## where are motifs relative to PAS? (histograms)
+pal <- c(AAUAAA = "#D5695D", UGUA = "#5D8CA8")
+AUA_motif <- ggplot(motif_hits_all, aes(x = rel_start, fill = motif)) +
+  geom_histogram(binwidth = 1, position = "identity", alpha = 0.9) +
+  facet_wrap(~ label, ncol = 1) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  labs(title = "Motif positions around PAS (RNA orientation)",
+       x = "Position relative to PAS (nt; upstream −, downstream +)",
+       y = "Count", family = "Times New Roman") +
+  scale_color_manual(values = pal) +
+  scale_fill_manual(values = pal) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+AUA_motif
+## export PAS with motifs as bed
+pas_with_AAUAAA <- per_pas_all %>% filter(has_AAUAAA)
+pas_with_UGUA <- per_pas_all %>% filter(has_UGUA)
+
+# Write BED-like tables (using window coordinates here; replace with your original PAS coords if preferred)
+#write.table(pas_with_AAUAAA %>% select(chrom, start, end, label, strand),file = "PAS_with_AAUAAA.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+#write.table(pas_with_UGUA %>% select(chrom, start, end, label, strand), file = "PAS_with_UGUA.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+```
+
+heatmap shows which 6-mers are enriched near PAS with nearby DMRs.
+
+To identify and visualize enriched RNA motifs (k-mers) around polyadenylation sites (PAS) that are proximal to differentially modified RNA regions—specifically Ψ (pseudouridine), m⁶A, and m⁵C modifications—across multiple experimental comparisons.
+
+PAS (Polyadenylation Sites) are key signals for mRNA cleavage and polyadenylation.
+
+RNA modifications (Ψ, m⁶A, m⁵C) are post-transcriptional modifications that may regulate or co-occur near PAS.
+
+This script examines whether specific short RNA motifs (k-mers) are enriched at PAS sites that are near differentially modified regions (DMRs) compared to all PAS sites.
+```{r}
+library(GenomicRanges)
+library(Biostrings)
+library(Rsamtools)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(purrr)
+library(ggplot2)
+
+win_up   <- 50
+win_down <- 50
+kmer_k   <- 6
+near_thresh <- 100
+
+
+fa <- FaFile(fasta); open(fa)
+
+to_gr <- function(df) {
+  GRanges(seqnames = df$chrom, ranges = IRanges(start = as.integer(df$start), end = as.integer(df$end)))
+}
+pas_to_gr <- function(df) {
+  st <- if ("strand" %in% names(df)) df$strand else "*"
+  st[is.na(st)] <- "*"
+  GRanges(seqnames = df$chrom, ranges = IRanges(start = as.integer(df$start), end = as.integer(df$end)), strand = st)
+}
+
+# Strand-aware PAS windows returned as RNAStringSet (T->U; minus strands RC'ed)
+extract_pas_windows <- function(pas_df, fa, up = 50, down = 50) {
+  pas_gr <- pas_to_gr(pas_df)
+  w <- up + 1 + down
+  win_gr <- resize(pas_gr, width = w, fix = "center")
+  win_gr <- trim(win_gr)
+  dna <- getSeq(fa, win_gr)
+  minus <- as.character(strand(win_gr)) == "-"
+  if (any(minus, na.rm = TRUE)) dna[minus] <- reverseComplement(dna[minus])
+  rna <- RNAStringSet(dna)
+  list(win_gr = win_gr, rna = rna, up = up, down = down)
+}
+
+# k-mer table for a set of RNAStringSet sequences
+kmers_counts <- function(rna, k = 6) {
+  # oligonucleotideFrequency returns counts per sequence; sum across rows
+  mat <- oligonucleotideFrequency(rna, width = k, step = 1, as.prob = FALSE)
+  tibble(kmer = colnames(mat), count = colSums(mat))
+}
+
+# Enrichment foreground vs background (Fisher test + log2FC)
+kmers_enrichment <- function(fg_rna, bg_rna, k = 6) {
+  fg <- kmers_counts(fg_rna, k)
+  bg <- kmers_counts(bg_rna, k)
+
+  # total possible k-mer placements = sum(nchar)-k+1 per sequence (>=0)
+  tot_pos <- function(rna, k) sum(pmax(width(rna) - k + 1, 0))
+  fg_total <- tot_pos(fg_rna, k)
+  bg_total <- tot_pos(bg_rna, k)
+
+  df <- full_join(fg, bg, by = "kmer", suffix = c("_fg","_bg")) %>%
+    mutate(count_fg = replace_na(count_fg, 0L),
+           count_bg = replace_na(count_bg, 0L),
+           non_fg = pmax(fg_total - count_fg, 0),
+           non_bg = pmax(bg_total - count_bg, 0)) %>%
+    rowwise() %>%
+    mutate( fisher_p = fisher.test(matrix(c(count_fg, non_fg, count_bg, non_bg), nrow = 2), alternative = "greater")$p.value) %>%
+    ungroup() %>%
+    mutate(adj_p = p.adjust(fisher_p, method = "BH"),
+      # add a small pseudocount to avoid log(0)
+      log2FC = log2((count_fg + 0.5) / fg_total) - log2((count_bg + 0.5) / bg_total)) %>%
+    arrange(adj_p, desc(log2FC))
+  df
+}
+
+# Find which PAS are "near" a given modification set (distance <= threshold)
+pas_indices_near_mod <- function(mod_df, pas_df, thresh = 100) {
+  mod_gr <- to_gr(mod_df)
+  pas_gr <- pas_to_gr(pas_df)
+  idx <- nearest(mod_gr, pas_gr, ignore.strand = TRUE)
+  keep <- !is.na(idx)
+  d <- distance(mod_gr[keep], pas_gr[idx[keep]])
+  unique(idx[keep][d <= thresh])
+}
+
+
+## Define comparisons and inputs
+
+comparisons <- list(
+  `FR113N_vs_w1118` = list(
+    psi = FR113_vs_w1118_psi_dmr,
+    m5C = FR113_vs_w1118_m_dmr,
+    m6A = FR113_vs_w1118_a_dmr,
+    pas = FR113_w1118_PAS),
+  `FR1113N_vs_Mettl3-KO` = list(
+    psi = FR1113_vs_Mettl3_KO_psi_dmr,
+    m5C = FR1113_vs_Mettl3_KO_m_dmr,
+    m6A = FR1113_vs_Mettl3_KO_a_dmr,
+    pas = Mettl3_FR113_PAS),
+  `W1118_vs_Mettl3-KO` = list(
+    psi = W1118_vs_Mettl3_psi_dmr,
+    m5C = W1118_vs_Mettl3_m_dmr,
+    m6A = W1118_vs_Mettl3_KO_a_dmr,
+    pas = Mettl3_w1118_PAS))
+
+
+## Run enrichment per comparison × modification
+
+results <- imap(comparisons, function(comp, comp_label) {
+
+  # PAS windows & background sequences (all PAS for this comparison)
+  ext <- extract_pas_windows(comp$pas, fa, up = win_up, down = win_down)
+  bg_rna <- ext$rna
+
+  imap(list(psi = comp$psi, m5C = comp$m5C, m6A = comp$m6A), function(mod_df, mod_label) {
+    # which PAS have a nearby mod site?
+    pas_ix <- pas_indices_near_mod(mod_df, comp$pas, thresh = near_thresh)
+
+    if (length(pas_ix) == 0) {
+      return(tibble(comparison = comp_label, modification = mod_label,
+                    kmer = character(0), count_fg = integer(0),
+                    count_bg = integer(0), fisher_p = numeric(0),
+                    adj_p = numeric(0), log2FC = numeric(0)))
+    }
+
+    fg_rna <- ext$rna[pas_ix]
+
+    enr <- kmers_enrichment(fg_rna, bg_rna, k = kmer_k) %>%
+      mutate(comparison = comp_label, modification = mod_label,
+             n_fg_PAS = length(pas_ix), n_bg_PAS = length(bg_rna)) %>%
+      relocate(comparison, modification)
+
+    enr
+  }) %>% bind_rows()
+}) %>% bind_rows()
+
+
+## Inspect top motifs
+
+topN <- 5
+top_tbl <- results %>%
+  group_by(comparison, modification) %>%
+  slice_min(order_by = adj_p, n = topN, with_ties = FALSE) %>%
+  ungroup()
+
+print(top_tbl %>% dplyr::select(comparison, modification, kmer, log2FC, adj_p, n_fg_PAS, n_bg_PAS))
+
+
+## Plot: heatmap of top motifs per group
+
+# Keep unique k-mers that appear in any group's topN
+top_kmers <- top_tbl %>% distinct(kmer) %>% pull(kmer)
+
+heat_df <- results %>%
+  filter(kmer %in% top_kmers) %>%
+  mutate(stat = pmin(-log10(adj_p), 5))  # cap for display
+
+
+my_cols <- c("#FFFFFF", "#ABD9E9", "#2C7BB6", "#FDAE61", "#D73027")
+
+motif_dmr <- ggplot(heat_df, aes(x = kmer, y = interaction(comparison, modification), fill = stat)) +
+  geom_tile(color = "white", size = 0.2) +
+  scale_fill_gradientn(colours = my_cols, name = "-log10(adj p)" ) +
+  labs(family = "Times New Roman", title = sprintf("k-mer (k=%d) enrichment at PAS near DMR sites", kmer_k), x = "k-mer", y = "comparison × modification", subtitle = sprintf("Foreground: PAS with a %s site within ±%d nt; Background: all PAS of comparison\nWindow around PAS: −%d…+%d nt (RNA orientation)", "{Ψ/m6A/m5C}", near_thresh, win_up, win_down)) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x  = element_text(angle = 90, vjust = 0.5, hjust = 1), legend.position = "right") +
+  theme(
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+motif_dmr
+
+```
+
+
+```{r}
+top_tbl %>% 
+  filter(adj_p < 0.05) %>% 
+  arrange(comparison, modification, adj_p) %>% 
+  dplyr::select(comparison, modification, kmer, log2FC, adj_p) %>% 
+  print(n = Inf)
+
+```
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+
+make_mod_heatmap <- function(mod_label, results, topN = 10, cap = 10) {
+  kmers_sel <- results %>%
+    filter(modification == mod_label) %>%
+    group_by(comparison) %>%
+    slice_min(order_by = adj_p, n = topN, with_ties = FALSE) %>%
+    ungroup() %>%
+    distinct(kmer) %>%
+    pull(kmer)
+
+  df_plot <- results %>%
+    filter(modification == mod_label, kmer %in% kmers_sel) %>%
+    mutate(stat = pmin(-log10(adj_p), cap)) %>% 
+    mutate(kmer = factor(kmer, levels = kmers_sel))
+
+  ggplot(df_plot, aes(x = kmer, y = comparison, fill = stat)) +
+  geom_tile(color = "white", size = 0.2) +
+  scale_fill_gradientn(colours = my_cols, name = "-log10(adj p)") +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x  = element_text(angle = 90, vjust = 0.5, hjust = 1),legend.position = "right")
+}
+
+# build plots
+p_m6A <- make_mod_heatmap("m6A", results, topN = 10, cap = 10)
+p_m5C <- make_mod_heatmap("m5C", results, topN = 10, cap = 10)
+p_psi <- make_mod_heatmap("psi", results, topN = 10, cap = 10)
+
+# print them
+p_m6A
+p_m5C
+p_psi
+
+```
+
+
+# Logo to find the most enriched sequence motif around PAS sites that are proximal to modification sites (Ψ, m⁶A, m⁵C) compared to all PAS sites.
+```{r}
+library(GenomicRanges)
+library(Biostrings)
+library(Rsamtools)
+library(ggplot2)
+library(ggseqlogo)
+library(dplyr)
+library(tidyr)
+library(tibble)
+
+
+to_gr <- function(df) GRanges(df$chrom, IRanges(as.integer(df$start), as.integer(df$end)))
+
+pas_to_gr <- function(df){
+  st <- if ("strand" %in% names(df)) df$strand else "*"
+  st[is.na(st)] <- "*"
+  GRanges(df$chrom, IRanges(as.integer(df$start), as.integer(df$end)), strand = st)
+}
+
+# Extract RNA-oriented window (minus strands reverse-complemented, T->U retained)
+extract_pas_windows <- function(pas_df, fa, up = 3, down = 3){
+  pas_gr <- pas_to_gr(pas_df)
+  w <- up + 1 + down
+  win_gr <- trim(resize(pas_gr, width = w, fix = "center"))
+  dna <- getSeq(fa, win_gr)
+  minus <- as.character(strand(win_gr)) == "-"
+  if (any(minus)) dna[minus] <- reverseComplement(dna[minus])
+  RNAStringSet(dna)
+}
+
+# Which PAS have a mod site within ±thresh nt?
+nearest_pas_indices <- function(mod_df, pas_df, thresh = 100){
+  mod_gr <- to_gr(mod_df); pas_gr <- pas_to_gr(pas_df)
+  idx <- nearest(mod_gr, pas_gr, ignore.strand = TRUE)
+  keep <- !is.na(idx)
+  if (!any(keep)) return(integer(0))
+  d <- distance(mod_gr[keep], pas_gr[idx[keep]])
+  sort(unique(idx[keep][d <= thresh]))
+}
+
+# Take a sub-window for the logo (e.g., -40..+10 in RNA orientation)
+slice_window <- function(rna, up_total, down_total, up_view = 3, down_view = 3){
+  center <- up_total + 1L
+  start <- center - up_view
+  end <- center + down_view
+  subseq(rna, start = pmax(1, start), end = pmin(width(rna), end))
+}
+
+
+make_mod_logo <- function(pas_df, mod_df, fa,
+                          comp_label = "", mod_label = "",
+                          up_total = 50, down_total = 50,
+                          up_view = 3,  down_view = 3,
+                          thresh = 100) {
+
+  all_rna <- extract_pas_windows(pas_df, fa, up = up_total, down = down_total)
+
+  pas_ix <- nearest_pas_indices(mod_df, pas_df, thresh = thresh)
+  if (length(pas_ix) == 0) {
+    warning(sprintf("[%s-%s] No PAS within ±%d nt of a mod site.", comp_label, mod_label, thresh))
+    return(NULL)
+  }
+
+  fg_chars <- as.character(slice_window(all_rna[pas_ix], up_total, down_total, up_view, down_view))
+  bg_pool  <- if (length(pas_ix) < length(all_rna)) all_rna[-pas_ix] else all_rna
+  bg_chars <- as.character(slice_window(bg_pool,      up_total, down_total, up_view, down_view))
+
+  stopifnot(length(fg_chars) > 0, length(bg_chars) > 0)
+
+  # nicer y-scale (bits) and x labels (-3..+3)
+  L <- nchar(fg_chars[1])
+  br <- seq(1, L, by = 1)
+  lab <- seq(-up_view, +down_view, by = 1)
+
+  p_fg <- ggseqlogo(fg_chars, method = "bits", seq_type = "rna") +
+    scale_x_continuous(breaks = br, labels = lab) +
+    labs(title = sprintf("%s - %s (FG)", comp_label, mod_label),
+         subtitle = sprintf("PAS with %s ≤ %d nt | n=%d | window: -%d…+%d",
+                            mod_label, thresh, length(fg_chars), up_view, down_view),
+         x = "Position (nt, RNA orientation)", y = "Information (bits)") +
+    theme_classic(base_size = 12)
+
+  p_bg <- ggseqlogo(bg_chars, method = "bits", seq_type = "rna") +
+    scale_x_continuous(breaks = br, labels = lab) +
+    labs(title = sprintf("%s - %s (BG)", comp_label, mod_label),
+         subtitle = sprintf("PAS without %s ≤ %d nt | n=%d | window: -%d…+%d",
+                            mod_label, thresh, length(bg_chars), up_view, down_view),
+         x = "Position (nt, RNA orientation)", y = "Information (bits)") +
+    theme_classic(base_size = 12)
+
+  list(fg = p_fg, bg = p_bg, fg_seq = fg_chars, bg_seq = bg_chars)
+}
+
+## 
+# ---- FR113N vs w1118 ----
+logos_FR113N_w1118 <- list(
+  Psi  = make_mod_logo(FR113_w1118_PAS, FR113_vs_w1118_psi_dmr, fa,
+                       comp_label="FR113N_vs_w1118", mod_label="Psi"),
+  m6A  = make_mod_logo(FR113_w1118_PAS, FR113_vs_w1118_a_dmr,   fa,
+                       comp_label="FR113N_vs_w1118", mod_label="m6A"),
+  m5C  = make_mod_logo(FR113_w1118_PAS, FR113_vs_w1118_m_dmr,   fa,
+                       comp_label="FR113N_vs_w1118", mod_label="m5C"))
+
+# FR1113N vs Mettl3-KO
+logos_FR1113N_KO <- list(
+  Psi  = make_mod_logo(Mettl3_FR113_PAS, FR1113_vs_Mettl3_KO_psi_dmr, fa,
+                       comp_label="FR1113N_vs_Mettl3-KO", mod_label="Psi"),
+  m6A  = make_mod_logo(Mettl3_FR113_PAS, FR1113_vs_Mettl3_KO_a_dmr,   fa,
+                       comp_label="FR1113N_vs_Mettl3-KO", mod_label="m6A"),
+  m5C  = make_mod_logo(Mettl3_FR113_PAS, FR1113_vs_Mettl3_KO_m_dmr,   fa,
+                       comp_label="FR1113N_vs_Mettl3-KO", mod_label="m5C"))
+
+#w1118 vs Mettl3-KO 
+logos_w1118_KO <- list(
+  Psi  = make_mod_logo(Mettl3_w1118_PAS, W1118_vs_Mettl3_psi_dmr, fa,
+                       comp_label="W1118_vs_Mettl3-KO", mod_label="Psi"),
+  m6A  = make_mod_logo(Mettl3_w1118_PAS, W1118_vs_Mettl3_KO_a_dmr, fa,
+                       comp_label="W1118_vs_Mettl3-KO", mod_label="m6A"),
+  m5C  = make_mod_logo(Mettl3_w1118_PAS, W1118_vs_Mettl3_m_dmr,   fa,
+                       comp_label="W1118_vs_Mettl3-KO", mod_label="m5C"))
+
+# Example: print m6A FG/BG logos for one comparison
+print(logos_FR113N_w1118$m6A$fg)
+
+
+```
+
+```{r}
+library(patchwork)
+library(ggplot2)
+
+safe_plot <- function(p, label = "No data") {
+  if (!is.null(p)) return(p)
+  ggplot() + theme_void() + ggtitle(label)
+}
+
+# 1) Per genotype: a single row with Psi, m6A, m5C (FG only)
+fg_row_by_genotype <- function(logos, title = "") {
+  (safe_plot(logos$Psi$fg, "Ψ FG") |
+   safe_plot(logos$m6A$fg, "m6A FG") |
+   safe_plot(logos$m5C$fg, "m5C FG")) + plot_annotation(title = title)
+}
+
+fg_FR113N_w1118 <- fg_row_by_genotype(logos_FR113N_w1118, "FR113N_vs_w1118-FG only")
+fg_FR1113N_KO <- fg_row_by_genotype(logos_FR1113N_KO, "FR1113N_vs_Mettl3-KO-FG only")
+fg_w1118_KO <- fg_row_by_genotype(logos_w1118_KO, "w1118_vs_Mettl3-KO-FG only")
+
+# Show
+fg_FR113N_w1118
+fg_FR1113N_KO
+fg_w1118_KO
+
+# 2) Per modification across genotypes (3 rows × 1 column)
+fg_by_mod <- function(mod = c("Ψ","m6A","m5C"), title = "") {
+  mod <- match.arg(mod)
+  r1 <- safe_plot(logos_FR113N_w1118[[mod]]$fg, paste0("FR113N_vs_w1118 ", mod, " FG"))
+  r2 <- safe_plot(logos_FR1113N_KO[[mod]]$fg, paste0("FR1113N_vs_Mettl3-KO ", mod, " FG"))
+  r3 <- safe_plot(logos_w1118_KO[[mod]]$fg, paste0("w1118_vs_Mettl3-KO ", mod, " FG"))
+  (r1 / r2 / r3) + plot_annotation(title = paste0(mod, " - FG across genotypes"))
+}
+
+fg_m6A <- fg_by_mod("m6A")
+fg_Psi <- fg_by_mod("Ψ")
+fg_m5C <- fg_by_mod("m5C")
+
+
+Fig4_logo <- (fg_FR113N_w1118 / fg_FR1113N_KO /fg_w1118_KO) +
+  plot_annotation(title = NULL, tag_levels = "A",
+    theme = theme(plot.title = element_text(size = 12, family = "Times New Roman"))) &
+  theme(text= element_text(size = 12, family = "Times New Roman"), axis.title  = element_text(size = 12), axis.text = element_text(size = 12), strip.text = element_text(size = 12), legend.text = element_text(size = 12), legend.title= element_text(size = 12))
+Fig4_logo
+#ggsave("FG_logos_by_genotype_FR113N_vs_w1118.pdf", fg_FR113N_w1118, width = 11, height = 3.2)
+#ggsave("FG_logos_m6A_across_genotypes.pdf", fg_m6A, width = 6, height = 9)
+
+```
+
+```{r, warning=F, message=FALSE}
+Fig3_CD <- (p_signed | AUA_motif) / motif_dmr +
+  plot_annotation(title = NULL, tag_levels = "A",
+    theme = theme(plot.title = element_text(size = 12, family = "Times New Roman"))) &
+  theme(text= element_text(size = 12, family = "Times New Roman"), axis.title  = element_text(size = 12), axis.text = element_text(size = 12), strip.text = element_text(size = 12), legend.text = element_text(size = 12), legend.title= element_text(size = 12))
+Fig3_CD
+#ggsave("Fig3_motif_distributions.pdf", Fig3_CD, width = 15, height = 10, dpi = 300, device = cairo_pdf)
+```
+
+# ML to predict RBPs 
+```{r}
+attract.db = read.delim("~/Downloads/ATtRACT/ATtRACT_db.txt") %>% filter(Organism == "Drosophila_melanogaster")
+
+```
+
+```{r}
+library(dplyr)
+library(readr)
+library(stringr)
+library(purrr)
+library(Biostrings)
+library(TFBSTools)
+library(tibble)
+
+attract.db <- read.delim("~/Downloads/ATtRACT/ATtRACT_db.txt", sep = "\t", check.names = FALSE)
+
+# Make column names unique (adds .1, .2, … to duplicates)
+names(attract.db) <- make.unique(names(attract.db))
+
+# Convert to tibble and proceed
+attract.db <- as_tibble(attract.db) %>%
+  filter(Organism == "Drosophila_melanogaster") %>%
+  mutate(Matrix_id = as.character(Matrix_id))
+
+names(attract.db)  # sanity check: all unique
+
+
+## B) Parse pwm.txt (FASTA-like)
+parse_attract_pwm <- function(pwm_file){
+  lines <- readLines(pwm_file)
+  hdr_idx <- which(startsWith(lines, ">"))
+  hdr_idx <- c(hdr_idx, length(lines)+1)
+  out <- vector("list", length(hdr_idx)-1)
+
+  for (i in seq_along(out)) {
+    h <- lines[hdr_idx[i]]
+    body <- lines[(hdr_idx[i]+1):(hdr_idx[i+1]-1)]
+    # header looks like: >1389\t9
+    parts <- str_split(str_sub(h, 2L), "\\s+")[[1]]
+    pwm_id <- parts[1]
+    pwm_len <- as.integer(parts[2])
+
+    mat <- read.table(text = paste(body, collapse = "\n"), header = FALSE, sep = "\t", stringsAsFactors = FALSE)
+    stopifnot(ncol(mat) == 4)
+    if (nrow(mat) != pwm_len)
+      warning(sprintf("PWM %s: header length=%d but matrix rows=%d", pwm_id, pwm_len, nrow(mat)))
+
+    colnames(mat) <- c("A","C","G","U")
+    mat_DNA <- as.matrix(mat)
+    colnames(mat_DNA) <- c("A","C","G","T")
+
+    out[[i]] <- list(Matrix_id = pwm_id, len = pwm_len, pwm = mat_DNA)
+    }
+  tibble(Matrix_id = vapply(out, `[[`, "", "Matrix_id"), len = vapply(out, `[[`, 0L, "len"),pwm = I(lapply(out, `[[`, "pwm")))
+}
+
+pwm_tbl <- parse_attract_pwm("~/Downloads/ATtRACT/pwm.txt")
+
+```
+
+
+```{r}
+## Join by Matrix_id (assumes exact match)
+motifs_dm <- attract.db %>%
+  inner_join(pwm_tbl, by = "Matrix_id")
+
+# Build TFBSTools PWMs (DNA alphabet)
+# Add a tiny pseudocount and a uniform background.
+bg <- c(A=0.25, C=0.25, G=0.25, T=0.25)
+pc <- 1e-6
+
+to_PWMatrix <- function(mrow) {
+  m <- mrow$pwm[[1]]
+  pfm <- round(m * 1e4) + pc     # convert probs to counts (scaled); add tiny pc
+  pfm <- t(pfm)                   # TFBSTools expects rows=letters, cols=positions
+  rownames(pfm) <- c("A","C","G","T")
+  PWMatrix(ID = mrow$Matrix_id, name = paste0(mrow$Gene_name, "_", mrow$Matrix_id), profileMatrix = pfm, bg = bg)
+}
+
+library(purrr)
+
+# motifs_dm must have columns: Gene_name, Matrix_id, pwm (list-column of numeric matrices)
+# Each pwm should be a matrix with rows=positions and cols=A,C,G,T (or A,C,G,U)
+
+# 0) Make sure it's a list-column of matrices
+stopifnot("pwm" %in% names(motifs_dm))
+stopifnot(all(map_lgl(motifs_dm$pwm, ~is.matrix(.x))))
+
+# 1) Helper that coerces a raw PWM to a TFBSTools PWMatrix safely
+make_PWMatrix <- function(gene, matrix_id, m){
+  # m should be positions x nucleotides (4)
+  if (ncol(m) != 4L && nrow(m) == 4L) {
+    # looks transposed -> transpose it
+    m <- t(m)
+  }
+  if (ncol(m) != 4L) {
+    stop(sprintf("Matrix %s for %s does not have 4 columns (has %d).",
+                 matrix_id, gene, ncol(m)))
+  }
+
+  # Normalize colnames to DNA order A,C,G,T
+  coln <- colnames(m)
+  if (is.null(coln)) coln <- c("A","C","G","U")
+  coln <- toupper(coln)
+  coln[coln == "U"] <- "T"
+  # Map columns to A,C,G,T order
+  wanted <- c("A","C","G","T")
+  # If columns aren't labeled, assume current order is A,C,G,U/T as in ATtRACT
+  if (!all(coln %in% wanted)) {
+    # try to infer by position; last becomes T
+    coln <- c("A","C","G","T")
+  }
+  colnames(m) <- coln
+  m <- m[, wanted, drop = FALSE]   # reorder to A,C,G,T
+
+  # At this point, m is positions x 4. TFBSTools expects rows=letters.
+  pfm <- t(m)  # now 4 x positions
+  rownames(pfm) <- wanted
+
+  # Convert probabilities to pseudo-counts (not strictly necessary, but common)
+  # If they're already counts, this is harmless.
+  if (max(pfm, na.rm = TRUE) <= 1) {
+    pfm <- round(pfm * 1e4)
+  }
+
+  PWMatrix(
+    ID = as.character(matrix_id),
+    name = paste0(gene, "_", matrix_id),
+    profileMatrix = pfm,
+    bg = c(A=.25, C=.25, G=.25, T=.25)
+  )
+}
+
+# 2) Build the list one-by-one with clear error messages
+build_list <- function(df){
+  res <- vector("list", nrow(df))
+  for (i in seq_len(nrow(df))) {
+    gene <- df$Gene_name[i]
+    mid  <- df$Matrix_id[i]
+    m    <- df$pwm[[i]]
+    res[[i]] <- tryCatch(
+      make_PWMatrix(gene, mid, m),
+      error = function(e){
+        msg <- sprintf("Failed at row %d (Gene=%s, Matrix_id=%s): %s", i, gene, mid, e$message)
+        stop(msg, call. = FALSE)
+      }
+    )
+  }
+  names(res) <- paste0(df$Gene_name, "_", df$Matrix_id)
+  PWMatrixList(res)
+}
+
+pwm_list <- build_list(motifs_dm)
+length(pwm_list)
+length(pwm_list)
+
+```
+
+```{r}
+cons_tbl <- motifs_dm %>%
+  mutate(consensus = purrr::map_chr(pwm, ~{
+    mat <- .x
+    # simple greedy consensus
+    paste(colnames(mat)[max.col(mat, ties.method = "first")], collapse = "")
+  })) %>%
+  mutate(Motif_DNA = chartr("U", "T", Motif)) %>%
+  dplyr::select(Gene_name, Matrix_id, Motif, Motif_DNA, consensus, len)
+
+# Spot-check a few
+head(cons_tbl, 8)
+
+```
+
+
+```{r}
+## Reuse your PAS window extractor but return DNA sequences
+extract_pas_windows_DNA <- function(pas_df, fa, up=150, down=50){
+  # your pas_to_gr() function from earlier
+  pas_gr <- GRanges(pas_df$chrom, IRanges(as.integer(pas_df$start), as.integer(pas_df$end)), strand = if ("strand" %in% names(pas_df)) pas_df$strand else "*")
+  width <- up + 1 + down
+  win_gr <- trim(resize(pas_gr, width = width, fix = "center"))
+  dna <- getSeq(fa, win_gr)
+  minus <- as.character(strand(win_gr)) == "-"
+  if (any(minus)) dna[minus] <- reverseComplement(dna[minus])
+  DNAStringSet(dna)
+}
+
+# Example: FR113_w1118_PAS windows
+# fa is your opened FaFile(dm6.fasta)
+rna_up <- 150; rna_down <- 50
+dna_windows <- extract_pas_windows_DNA(FR113_w1118_PAS, fa, up=rna_up, down=rna_down)
+
+# Score one PWM across all PAS windows (returns max score and count >= threshold)
+score_pwm <- function(pwm, seqs, min.score="80%"){
+  # TFBSTools::searchSeq returns a SiteSet per sequence; we can vectorize by lapply
+  hits <- lapply(seqs, function(sq) searchSeq(pwm, sq, min.score=min.score))
+  max_score <- vapply(hits, function(h) if(length(score(h))==0) NA_real_ else max(score(h)), 0.0)
+  n_sites   <- vapply(hits, function(h) length(score(h)), 0L)
+  tibble(max_score = max_score, n_sites = n_sites)
+}
+
+# Build features for all PWMs (can be a lot—filter or parallelize as needed)
+# For speed: start with unique Gene_name, keeping the best Matrix_id per gene by ATtRACT Score
+keep_idxs <- motifs_dm %>%
+  group_by(Gene_name) %>%
+  slice_max(order_by = Score, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+pwms_subset <- PWMatrixList(pwm_list[names(pwm_list) %in% paste0(keep_idxs$Gene_name, "_", keep_idxs$Matrix_id)])
+
+# Compute features
+feat_list <- lapply(seq_along(pwms_subset), function(i){
+  id <- names(pwms_subset)[i]
+  sc <- score_pwm(pwms_subset[[i]], dna_windows, min.score = "80%")
+  sc$feature <- paste0("RBP_", id, "_max80")
+  sc
+})
+# combine: one row per PAS (length = length(dna_windows)); pivot wider to feature matrix
+feat_mat <- bind_rows(feat_list, .id="idx") %>%
+  group_by(idx) %>%
+  mutate(row = row_number()) %>%  # dummy row within PAS, we’ll pivot on feature
+  ungroup() %>%
+  select(row, feature, max_score) %>%
+  tidyr::pivot_wider(names_from = feature, values_from = max_score)
+
+# align with PAS table
+stopifnot(nrow(feat_mat) == length(dna_windows))
+
+```
+
+
+```{r}
+# Example proxy label: PAS with m6A DMR <= 100 nt
+nearest_pas_indices <- function(mod_df, pas_df, thresh=100){
+  mod_gr <- GRanges(mod_df$chrom, IRanges(as.integer(mod_df$start), as.integer(mod_df$end)))
+  pas_gr <- GRanges(pas_df$chrom, IRanges(as.integer(pas_df$start), as.integer(pas_df$end)),
+                    strand = if ("strand" %in% names(pas_df)) pas_df$strand else "*")
+  idx <- nearest(mod_gr, pas_gr, ignore.strand = TRUE)
+  keep <- !is.na(idx)
+  d <- distance(mod_gr[keep], pas_gr[idx[keep]])
+  sort(unique(idx[keep][d <= thresh]))
+}
+pos_ix <- nearest_pas_indices(FR113_vs_w1118_a_dmr, FR113_w1118_PAS, thresh = 100)
+
+labels <- integer(nrow(feat_mat)); labels[pos_ix] <- 1L
+
+# Simple lasso logistic regression
+library(glmnet)
+X <- as.matrix(feat_mat[,-1])  # drop helper 'row' if present; ensure numeric
+y <- labels
+
+set.seed(1)
+cvfit <- cv.glmnet(X, y, family = "binomial", alpha = 1, nfolds = 5)
+coef(cvfit, s = "lambda.1se")  # selected RBP features
+
+```
+

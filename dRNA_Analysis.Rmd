@@ -1,0 +1,5088 @@
+---
+title: "dRNA_Analysis"
+author: "George Boateng-Sarfo"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+The output file **data.site_proba.csv** contains the probability of modification at each individual position for each transcript. The output file will have 6 columns
+
+***transcript_id***: The transcript id of the predicted position
+***transcript_position****: The transcript position of the predicted position
+***n_reads***: The number of reads for that particular position
+***probability_modified***: The probability that a given site is modified
+***kmer***: The 5-mer motif of a given site
+***mod_ratio***: The estimated percentage of reads in a given site that is modified
+
+
+```{r, message=FALSE}
+library(duckplyr)
+library(ggplot2)
+#library(dplyr)
+library(ggvenn)
+library(rtracklayer)
+library(ggpubr)
+library(ggridges)
+library(dplyr)
+library(plotly)
+library(GenomicFeatures)
+library(GenomicRanges)
+#library(ChIPseeker)
+library(Guitar)
+#library(ChIPpeakAnno)
+#library(tidyverse)
+library(data.table)
+library(tools)
+library(tidyr)
+```
+
+# Load GTF file
+```{r}
+
+ens_gtf <- rtracklayer::import.gff("~/Dropbox/all_files/dm6_new.gtf")
+
+gtf_df <- as.data.frame(ens_gtf)
+
+transcript_gtf <- gtf_df %>%
+  dplyr::filter(type == "transcript") %>%
+  dplyr::select(seqnames, transcript_id, gene_id,type, gene_name, gene_biotype, strand)
+
+transcript_gtf_unique <- transcript_gtf %>%
+  dplyr::distinct(transcript_id, .keep_all = TRUE)
+```
+
+# load m6anet data sets:
+```{r}
+dRNA_FR113N = read.delim("~/Dropbox/all_files/dRNA/FR113N_RNA002/data.site_proba.csv", header = T, sep = ",")
+dRNA_W1118 = read.delim("~/Dropbox/all_files/dRNA/W1118_RNA002/data.site_proba.csv", header = T, sep = ",")
+dRNA_Mettl3_KO = read.delim("~/Dropbox/all_files/dRNA/Mettl3_KO_RNA002/data.site_proba.csv", header = T, sep = ",")
+
+dRNA_FR113N <- dRNA_FR113N %>%
+  mutate(start = transcript_position - 1,
+    end = transcript_position + 1)
+
+dRNA_W1118 <- dRNA_W1118 %>%
+  mutate(start = transcript_position - 1,
+    end = transcript_position + 1)
+
+dRNA_Mettl3_KO <- dRNA_Mettl3_KO %>%
+  mutate(start = transcript_position - 1,
+    end = transcript_position + 1)
+
+
+```
+
+```{r}
+# Merge with m6A dataset
+dRNA_FR113N <- merge(dRNA_FR113N, transcript_gtf_unique, by.x = "transcript_id", by.y = "seqnames", all.x = TRUE)
+dRNA_W1118 <- merge(dRNA_W1118, transcript_gtf_unique, by.x = "transcript_id", by.y = "seqnames", all.x = TRUE)
+dRNA_Mettl3_KO <- merge(dRNA_Mettl3_KO, transcript_gtf_unique, by.x = "transcript_id", by.y = "seqnames", all.x = TRUE)
+
+
+#dRNA_FR113N <- dRNA_FR113N %>%
+#  dplyr::distinct(transcript_id, .keep_all = TRUE)
+
+#dRNA_W1118 <- dRNA_W1118 %>%
+#  dplyr::distinct(transcript_id, .keep_all = TRUE)
+
+#dRNA_Mettl3_KO <- dRNA_Mettl3_KO %>%
+#  dplyr::distinct(transcript_id, .keep_all = TRUE)
+
+#write.table(dRNA_FR113N, file = "dRNA_FR113N_RNA002_m6Anet.txt", quote = F, row.names = F, col.names = T, sep = "\t")
+
+#write.table(dRNA_W1118, file = "dRNA_W1118_RNA002_m6Anet.txt", quote = F, row.names = F, col.names = T, sep = "\t")
+
+#write.table(dRNA_Mettl3_KO, file = "dRNA_Mettl3_KO_RNA002_m6Anet.txt", quote = F, row.names = F, col.names = T, sep = "\t")
+```
+
+
+
+```{r}
+dRNA_FR113N_unique <- dRNA_FR113N %>%
+  group_by(transcript_position) %>%
+  dplyr::slice(1) %>%
+  ungroup()
+
+dRNA_W1118_unique <- dRNA_W1118 %>%
+  group_by(transcript_position) %>%
+  dplyr::slice(1) %>% 
+  ungroup()
+
+dRNA_Mettl3_KO_unique <- dRNA_Mettl3_KO %>%
+  group_by(transcript_position) %>%
+  dplyr::slice(1) %>% 
+  ungroup()
+
+
+```
+
+
+
+```{r}
+dRNA_FR113N_unique$condition <- "FR113N"
+dRNA_W1118_unique$condition <- "W1118"
+dRNA_Mettl3_KO_unique$condition <- "Mettl3_KO"
+
+combined_data <- bind_rows(dRNA_FR113N_unique, dRNA_W1118_unique, dRNA_Mettl3_KO_unique)
+```
+
+# Count k-mer occurrences per condition
+```{r}
+
+kmers_counts <- combined_data %>%
+  group_by(condition, kmer) %>%
+  summarise(count = n(), .groups = "drop")
+
+total_counts <- kmers_counts %>%
+  group_by(condition) %>%
+  summarise(total = sum(count), .groups = "drop")
+
+kmers_freq <- kmers_counts %>%
+  left_join(total_counts, by = "condition") %>%
+  mutate(relative_freq = (count / total) * 100)
+
+head(kmers_freq)
+
+```
+
+Histogram of k-mer frequencies
+
+```{r}
+ggplot(kmers_freq, aes(x = kmer, y = relative_freq, fill = condition)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Relative Frequency of DRACH motifs detected by m6Anet",
+       x = "K-mer", y = "Relative Frequency") +
+  theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    coord_flip()
+
+```
+
+
+```{r}
+ggplot(combined_data, aes(x = probability_modified, fill = condition)) +
+  geom_density(alpha = 0.1) +
+  labs(title = "Distribution of Modification Probabilities",
+       x = "Probability Modified",
+       y = "Density") +
+  theme_minimal()
+
+
+
+ggplot(combined_data, aes(x = n_reads, y = probability_modified, color = condition)) +
+  geom_point(alpha = 0.1) +
+  labs(title = "Number of Reads vs. Probability Modified",
+       x = "Number of Reads",
+       y = "Probability Modified") +
+  theme_minimal()
+
+kmer_counts <- combined_data %>%
+  group_by(condition, kmer) %>%
+  summarise(count = n(), .groups = "drop")
+
+ggplot(kmer_counts, aes(x = kmer, y = count, fill = condition)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "K-mer Frequency by Condition",
+       x = "K-mer",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+kmer_avg_prob <- combined_data %>%
+  group_by(condition, kmer) %>%
+  summarise(avg_prob = mean(probability_modified), .groups = "drop")
+
+ggplot(kmer_avg_prob, aes(x = kmer, y = condition, fill = avg_prob)) +
+  geom_tile() +
+  labs(title = "Average Modification Probability by K-mer and Condition",
+       x = "K-mer",
+       y = "Condition",
+       fill = "Avg Probability") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+```{r}
+library(ggvenn)
+library(dplyr)
+# Extract unique transcript IDs for each dataset
+transcripts_FR113N <- unique(dRNA_FR113N_unique$transcript_id.y)
+transcripts_W1118 <- unique(dRNA_W1118_unique$transcript_id.y)
+transcripts_Mettl3_KO <- unique(dRNA_Mettl3_KO_unique$transcript_id.y)
+
+# Create a named list for ggvenn
+transcript_sets <- list(
+  FR113N = transcripts_FR113N,
+  W1118 = transcripts_W1118,
+  Mettl3_KO = transcripts_Mettl3_KO)
+
+ggvenn(transcript_sets, show_percentage = F,
+       fill_color = c("#1f78b4", "#33a02c", "#e31a1c"), 
+       stroke_size = 0.5, set_name_size = 5)
+
+```
+
+# Add 50 bp upstream and downstream
+```{r}
+
+combined_data <- combined_data %>%
+  mutate(start = transcript_position - 50,
+    end = transcript_position + 50)
+
+
+head(combined_data)
+```
+
+
+Number of m6a sites per sample
+```{r}
+counts <- data.frame(
+  Sample = c("FR113N", "W1118", "METTL3-KO"),
+  m6A_Sites = c(nrow(dRNA_FR113N_unique), nrow(dRNA_W1118_unique), nrow(dRNA_Mettl3_KO_unique)))
+
+ggplot(counts, aes(x = Sample, y = m6A_Sites, fill = Sample)) +
+  geom_bar(stat = "identity", color = "black") +
+  geom_text(aes(label = m6A_Sites), vjust = -0.5, size = 5, fontface = "bold") +
+  theme_minimal() +
+  labs(title = "Number of m6A sites detected using m6anet", 
+       x = "Sample", 
+       y = "Number of m6A Sites") +
+  scale_fill_manual(values = c("FR113N" = "#1f78b4", "W1118" = "#33a02c", "METTL3-KO" = "#e31a1c")) +
+  theme(legend.position = "none", text = element_text(size = 14))
+
+
+```
+
+
+```{r}
+
+# Combine data for comparison
+mod_data <- rbind(
+  data.frame(Sample = "FR113N", mod_ratio = dRNA_FR113N_unique$probability_modified),
+  data.frame(Sample = "W1118", mod_ratio = dRNA_W1118_unique$probability_modified),
+  data.frame(Sample = "METTL3-KO", mod_ratio = dRNA_Mettl3_KO_unique$probability_modified))
+
+
+# Pairwise Wilcoxon test
+pvals <- compare_means(mod_ratio ~ Sample, data = mod_data, method = "wilcox.test")
+
+# Raincloud plot with p-values
+ggplot(mod_data, aes(x = Sample, y = mod_ratio, fill = Sample)) +
+  geom_violin(alpha = 0.5) +
+  geom_boxplot(width = 0.2, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 0.8, alpha = 0.5) +
+  stat_compare_means(method = "wilcox.test", label = "p.signif", comparisons = list(c("FR113N", "METTL3-KO"), c("W1118", "METTL3-KO"))) +
+  theme_minimal() +
+  labs(title = "m6A modification ratio detected by m6Anet", 
+       x = "Sample", 
+       y = "Modification Ratio") +
+  scale_fill_manual(values = c("FR113N" = "#1f78b4", "W1118" = "#33a02c", "METTL3-KO" = "#e31a1c")) +
+  theme(text = element_text(size = 14))
+
+```
+
+
+```{r}
+output_dRNA_FR113N_unique <- dRNA_FR113N_unique[, c("transcript_id", "start", "end", "strand")]
+output_dRNA_W1118_unique <- dRNA_W1118_unique[, c("transcript_id", "start", "end", "strand")]
+output_dRNA_Mettl3_KO_unique <- dRNA_Mettl3_KO_unique[, c("transcript_id", "start", "end", "strand")]
+# Write to file
+#write.table(output_dRNA_FR113N_unique, file = "~/Dropbox/all_files/dRNA/FR113N_RNA002/m6Anet_out_dRNA_FR113N_unique.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+#write.table(output_dRNA_W1118_unique, file = "~/Dropbox/all_files/dRNA/FR113N_RNA002/m6anet_out_dRNA_W1118_unique.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+#write.table(output_dRNA_Mettl3_KO_unique, file = "~/Dropbox/all_files/dRNA/FR113N_RNA002/m6anet_out_dRNA_Mettl3_KO_unique.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+
+```
+
+
+
+```{r}
+ggplot(combined_data, aes(x = kmer, y = mod_ratio, fill = probability_modified)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +  # Box plot without outliers
+  geom_jitter(aes(color = probability_modified), width = 0.2, size = 1.5, alpha = 0.6) +  # Add data points
+  scale_fill_gradient(low = "blue", high = "red") +  # Color gradient for probability_modified
+  scale_color_gradient(low = "blue", high = "red") +  # Match jitter point colors
+  facet_wrap(~ condition, scales = "free") +  # Separate plots for each sample
+  theme_minimal() +
+  labs(title = "Probablity of modification and modification ratio per k-mer",
+       x = "k-mer",
+       y = "Modification Ratio") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        text = element_text(size = 14), plot.title = element_text(hjust = 0.5))
+
+```
+
+# drummer
+
+When run to completion, DRUMMER generates a single tab-seperated text file (summary.txt) within each comparison directory containing all predicted candidate RNA modification sites with contextual information (genome position, isoform position, sequence motif, etc). When run in m6A mode (-a TRUE), a distribution plot is also generated in an accompanying .pdf file (m6A_plot.pdf). The output directory 'complete_analysis' contains individual data files for each reference sequence provided. A second (optional [-v]) directory 'visualization' contains individual plots of both G-test scores (accumulation/depletion) versus position for each individual reference sequence, along with each odd-ratio score.
+
+A detailed description of column headers in the summary.txt file is shown below. For the individual outputs, please see the accompanying file 'individual_output_headers.txt' for a full description of headers.
+
+[1] transcript_id:      name of transcript (isoform mode only)
+[2] chromosome:         name of chromosome
+[3] reference_base:     reference nucleotide at this position
+[4] pos_mod:            position of nucleotide on transcript (isoform mode) or genome (exome mode)
+[5] depth_mod:          read depth at this position (RNA modification present dataset)
+[6] ref_fraction_mod:   fraction of reads with reference base at this position (RNA modification present dataset)
+[7] depth_unmod:        read depth at this position (RNA modification absent dataset)
+[8] ref_fraction_unmod: fraction of reads with reference base at this position (RNA modification absent dataset)
+[9] frac_diff:          difference between ref_fraction_unmod and ref_fraction_mod
+[10] odds_ratio:        odds ratio
+[11] OR_padj:           odds ratio adjusted p-value (bonferroni)
+[12] eleven_bp_motif:   sequence (11-mer) centered on current position
+[13] G_test:            result of 2x5 G-test
+[14] G_padj:            G-test adjusted p-value (bonferroni)
+[15] candidate_site:    values limited to candidate, [candidate masked], or empty based on cutoffs chosen
+[16] nearest_ac:        (m6A only) distance (nt) to nearest AC motif (-ve indicates upstream, +ve indicates downstream)
+[17] nearest_ac_motif:  (m6A only) sequence (5-mer) of nearest AC motif (centered on A)
+[18] genomic_position:  position of nucleotide on genome (isoform mode)
+
+
+
+```{r}
+drummer_dRNA_FR113N = read.delim("~/Dropbox/all_files/dRNA/FR113N_RNA002/FR113N_Drummer_summary.txt", header = T, sep = "\t")
+drummer_dRNA_W1118 = read.delim("~/Dropbox/all_files/dRNA/W1118_RNA002/W1118_Drummer_summary.txt", header = T, sep = "\t")
+
+
+```
+
+
+```{r}
+# Merge with m6A dataset
+drummer_dRNA_FR113N <- merge(drummer_dRNA_FR113N, transcript_gtf, by.x = "transcript_id", all.x = TRUE)
+drummer_dRNA_W1118 <- merge(drummer_dRNA_W1118, transcript_gtf, by.x = "transcript_id", all.x = TRUE)
+
+
+drummer_dRNA_FR113N <- drummer_dRNA_FR113N %>%
+  mutate(start = transcript_pos - 1,
+    end = transcript_pos + 1)
+
+drummer_dRNA_W1118 <- drummer_dRNA_W1118 %>%
+  mutate(start = transcript_pos - 1,
+    end = transcript_pos + 1)
+
+
+
+output_drummer_dRNA_FR113N <- drummer_dRNA_FR113N[, c("seqnames", "start", "end", "strand")]
+output_drummer_dRNA_W1118 <- drummer_dRNA_W1118[, c("seqnames", "start", "end", "strand")]
+# Write to file
+#write.table(output_drummer_dRNA_FR113N, file = "~/Dropbox/all_files/dRNA/FR113N_RNA002/drummer_out_dRNA_FR113N_unique.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+#write.table(output_dRNA_W1118_unique, file = "~/Dropbox/all_files/dRNA/FR113N_RNA002/drummer_out_dRNA_W1118_unique.bed", sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+
+```
+
+
+```{r}
+drummer_dRNA_FR113N$condition <- "FR113N"
+drummer_dRNA_W1118$condition <- "W1118"
+
+drummer_combined_data <- bind_rows(drummer_dRNA_FR113N, drummer_dRNA_W1118)
+```
+
+
+```{r}
+counts <- data.frame(
+  Sample = c("FR113N", "W1118"),
+  m6A_Sites = c(nrow(drummer_dRNA_FR113N), nrow(drummer_dRNA_W1118)))
+
+ggplot(counts, aes(x = Sample, y = m6A_Sites, fill = Sample)) +
+  geom_bar(stat = "identity", color = "black") +
+  geom_text(aes(label = m6A_Sites), vjust = -0.5, size = 5, fontface = "bold") +
+  theme_minimal() +
+  labs(title = "Number of m6A sites detected using DRUMMER", 
+       x = "Sample", 
+       y = "Number of m6A Sites") +
+  scale_fill_manual(values = c("FR113N" = "#1f78b4", "W1118" = "#33a02c")) +
+  theme(legend.position = "none", text = element_text(size = 14))
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Combine data from both samples
+drummer_combined <- bind_rows(
+  drummer_dRNA_FR113N %>% mutate(Sample = "FR113N"),
+  drummer_dRNA_W1118 %>% mutate(Sample = "W1118")
+)
+
+# Count occurrences of each motif
+motif_counts <- drummer_combined %>%
+  group_by(nearest_ac_motif) %>%
+  summarise(m6A_Sites = n()) %>%
+  arrange(desc(m6A_Sites))  # Sort by frequency
+
+# Create bar plot
+ggplot(motif_counts, aes(x = reorder(nearest_ac_motif, -m6A_Sites), y = m6A_Sites, fill = nearest_ac_motif)) +
+  geom_bar(stat = "identity", color = "black") +  
+  theme_minimal() +
+  labs(title = "Number of m6A Sites detected by DRUMMER", 
+       x = "Motif (5-mer)", 
+       y = "Number of m6A Sites") +
+  scale_colour_viridis_b() +  # Use Viridis for better color contrast
+  theme(legend.position = "none", text = element_text(size = 14)) +
+  coord_flip()  # Flip axes for readability
+
+```
+
+
+```{r}
+ggplot(drummer_combined, aes(x = nearest_ac_motif, y = OR_padj, fill = )) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +  # Box plot without outliers
+  geom_jitter(aes(color = G_padj), width = 0.2, size = 1.5, alpha = 0.6) +  # Add data points
+  scale_fill_gradient(low = "blue", high = "red") +  # Color gradient for G_padj
+  scale_color_gradient(low = "blue", high = "red") +  # Match jitter point colors
+  facet_wrap(~ condition, scales = "free") +  # Separate plots for each sample
+  theme_minimal() +
+  labs(title = "k-mer modification Ratio detected by DRUMMER ",
+       x = "k-mer",
+       y = "Modification Ratio",
+       fill = "Probability Modified") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        text = element_text(size = 14))
+```
+
+
+```{r}
+library(ggvenn)
+
+# Extract unique transcript IDs from each dataset
+m6Anet_FR113N <- unique(dRNA_FR113N_unique$transcript_id.y)
+m6Anet_W1118 <- unique(dRNA_W1118_unique$transcript_id.y)
+m6Anet_Mettl3_KO <- unique(dRNA_Mettl3_KO_unique$transcript_id.y)
+drummer_FR113N <- unique(drummer_dRNA_FR113N$transcript_id)
+drummer_W1118 <- unique(drummer_dRNA_W1118$transcript_id)
+
+# Create a list of datasets for Venn diagram
+venn_data <- list(
+  "m6Anet FR113N" = m6Anet_FR113N,
+  "m6Anet W1118" = m6Anet_W1118,
+  "m6Anet METTL3-KO" = m6Anet_Mettl3_KO,
+  "DRUMMER FR113N" = drummer_FR113N,
+  "DRUMMER W1118" = drummer_W1118)
+
+# Generate Venn diagram
+ggvenn(venn_data, show_percentage = F,
+       fill_color = c("#1f78b4", "#33a02c", "#e31a1c", "#ff7f00", "#6a3d9a"), 
+       stroke_size = 1, set_name_size = 5)
+
+```
+
+
+```{r}
+lollipop_data <- data.frame(
+    Sample = c("m6Anet FR113N", "m6Anet W1118", "m6Anet METTL3-KO", "DRUMMER FR113N", "DRUMMER W1118"),
+    Transcripts = c(length(unique(dRNA_FR113N_unique$transcript_id.y)), 
+                    length(unique(dRNA_W1118_unique$transcript_id.y)), 
+                    length(unique(dRNA_Mettl3_KO_unique$transcript_id.y)), 
+                    length(unique(drummer_dRNA_FR113N$transcript_id)), 
+                    length(unique(drummer_dRNA_W1118$transcript_id))),
+    m6A_Sites = c(nrow(dRNA_FR113N_unique), 
+                  nrow(dRNA_W1118_unique), 
+                  nrow(dRNA_Mettl3_KO_unique), 
+                  nrow(drummer_dRNA_FR113N), 
+                  nrow(drummer_dRNA_W1118)))
+
+# Create lollipop plot
+ggplot(lollipop_data, aes(x = reorder(Sample, -m6A_Sites), y = m6A_Sites, color = Sample)) +
+    geom_point(size = 5) +  
+    geom_segment(aes(x = Sample, xend = Sample, y = 0, yend = m6A_Sites), size = 1) +  
+    geom_text(aes(label = paste0(m6A_Sites, " sites\n(", Transcripts, " transcripts)")), 
+              vjust = -0.5, size = 5, fontface = "bold") +
+    theme_minimal() +
+    labs(title = "Number of m6A sites and transcripts detected by m6Anet and DRUMMER", x = "Sample", y = "Number of m6A Sites") +
+    scale_color_manual(values = c("#1f78b4", "#33a02c", "#e31a1c", "#ff7f00", "#6a3d9a")) +
+    theme(text = element_text(size = 14)) +
+    coord_flip()
+
+```
+
+
+```{r}
+library(dplyr)
+library(UpSetR)
+
+# Get all unique transcript IDs across datasets
+all_transcripts <- unique(c(
+  dRNA_FR113N_unique$transcript_id.y,
+  dRNA_W1118_unique$transcript_id.y,
+  dRNA_Mettl3_KO_unique$transcript_id.y,
+  drummer_dRNA_FR113N$transcript_id,
+  drummer_dRNA_W1118$transcript_id
+))
+
+# Ensure no missing values
+all_transcripts <- all_transcripts[!is.na(all_transcripts)]
+
+# Create a binary matrix
+venn_matrix <- data.frame(
+  transcript_id = all_transcripts,
+  m6Anet_FR113N = all_transcripts %in% dRNA_FR113N_unique$transcript_id.y,
+  m6Anet_W1118 = all_transcripts %in% dRNA_W1118_unique$transcript_id.y,
+  m6Anet_METTL3_KO = all_transcripts %in% dRNA_Mettl3_KO_unique$transcript_id.y,
+  DRUMMER_FR113N = all_transcripts %in% drummer_dRNA_FR113N$transcript_id,
+  DRUMMER_W1118 = all_transcripts %in% drummer_dRNA_W1118$transcript_id)
+
+# Ensure all columns exist before plotting
+print(names(venn_matrix))
+
+# Remove transcript_id column
+venn_matrix <- venn_matrix %>% 
+  dplyr::select(-transcript_id)
+
+# Check structure before UpSetR
+str(venn_matrix)
+
+# Generate UpSet plot
+#upset(venn_matrix, 
+#      sets = colnames(venn_matrix),  # Automatically get column names
+#      sets.bar.color = c("#1f78b4", "#33a02c", "#e31a1c", "#ff7f00", "#6a3d9a"),
+#      mainbar.y.label = "Shared Transcripts",
+#      sets.x.label = "Dataset",
+ #     order.by = "freq")
+
+```
+
+```{r}
+drummer_dRNA_FR113N_bed = read.delim("~/Dropbox/all_files/dRNA/drummer_out_dRNA_FR113N_unique.bed", header = T, sep = "\t")
+
+drummer_dRNA_w1118_bed = read.delim("~/Dropbox/all_files/dRNA/drummer_out_dRNA_W1118_unique.bed", header = T, sep = "\t")
+
+# Swap strand for FR113N
+drummer_dRNA_FR113N_bed$strand <- ifelse(drummer_dRNA_FR113N_bed$strand == "+", "-", "+")
+
+# Swap strand for W1118
+drummer_dRNA_w1118_bed$strand <- ifelse(drummer_dRNA_w1118_bed$strand == "+", "-", "+")
+
+
+
+#write.table(drummer_dRNA_FR113N_bed, file = "drummer_dRNA_FR113N_bed", quote = F, sep = "\t", row.names = F, col.names = T)
+
+#write.table(drummer_dRNA_w1118_bed, file = "drummer_dRNA_w1118_bed", quote = F, sep = "\t", row.names = F, col.names = T)
+```
+
+
+
+
+##### RNA Total RNAseq 
+
+
+w1118
+```{r}
+#dmel.ref = rtracklayer::import("~/Dropbox/all_files/dm6_new.gtf")Extreme_SSD/dRNASEQ/induro_dRNAseq
+W1118_r1_a_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/W1118_induro_mRNA_2025_102.sorted_a.tsv") %>% dplyr::filter(score >= 5, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+W1118_r1_m_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/W1118_induro_mRNA_2025_102.sorted_m.tsv") %>% dplyr::filter(score >= 5, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+W1118_r1_pseu_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/W1118_induro_mRNA_2025_102.sorted_17802.tsv") %>% dplyr::filter(score >= 5, percent_modified > 10, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+
+#/Volumes/Extreme_SSD/dRNASEQ/induro_dRNAseq/annotated_modkit_outfiles/w1118/
+W1118_r2_a_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/W1118_Rep1_mRNA_m6A_m5C_pseu.aligned.sorted_a.tsv") %>% dplyr::filter(score >= 5, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+W1118_r2_m_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/W1118_Rep1_mRNA_m6A_m5C_pseu.aligned.sorted_m.tsv") %>% dplyr::filter(score >= 5, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+W1118_r2_pseu_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/W1118_Rep1_mRNA_m6A_m5C_pseu.aligned.sorted_17802.tsv") %>% dplyr::filter(score >= 5, percent_modified > 10, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+
+W1118_r3_a_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/W1118_rep2_ref.sorted_a.tsv") %>% dplyr::filter(score >= 5, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+W1118_r3_m_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/W1118_rep2_ref.sorted_m.tsv") %>% dplyr::filter(score >= 5, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+W1118_r3_pseu_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/W1118_rep2_ref.sorted_17802.tsv") %>% dplyr::filter(score >= 5, percent_modified > 10, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+
+colnames(W1118_r1_a_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(W1118_r1_m_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(W1118_r1_pseu_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+
+colnames(W1118_r2_a_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(W1118_r2_m_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(W1118_r2_pseu_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+
+
+colnames(W1118_r3_a_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(W1118_r3_m_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(W1118_r3_pseu_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+```
+
+
+```{r}
+library(dplyr)
+
+# Combine replicates for each modification type
+all_a <- bind_rows(W1118_r1_a_mRNA, W1118_r2_a_mRNA, W1118_r3_a_mRNA)
+all_m <- bind_rows(W1118_r1_m_mRNA, W1118_r2_m_mRNA, W1118_r3_m_mRNA)
+all_pseu <- bind_rows(W1118_r1_pseu_mRNA, W1118_r2_pseu_mRNA, W1118_r3_pseu_mRNA)
+
+# Count modification sites per gene
+top_a_genes <- all_a %>%
+  group_by(Gene_ID) %>%
+  summarise(n_sites = n()) %>%
+  arrange(desc(n_sites))
+
+top_m_genes <- all_m %>%
+  group_by(Gene_ID) %>%
+  summarise(n_sites = n()) %>%
+  arrange(desc(n_sites))
+
+top_pseu_genes <- all_pseu %>%
+  group_by(Gene_ID) %>%
+  summarise(n_sites = n()) %>%
+  arrange(desc(n_sites))
+
+head(top_a_genes, 20)   # m6A-enriched
+head(top_m_genes, 20)   # m5C-enriched
+head(top_pseu_genes, 20) # Ψ-enriched
+
+```
+
+FR113N
+```{r}
+#percent_modified >= 50,
+FR1113N_r1_a_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113N_05_11_2025_rep2_ref.sorted_a.tsv") %>% dplyr::filter(score >= 5, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+FR1113N_r1_m_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113N_05_11_2025_rep2_ref.sorted_m.tsv") %>% dplyr::filter(score >= 5, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+FR1113N_r1_pseu_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113N_05_11_2025_rep2_ref.sorted_17802.tsv") %>% dplyr::filter(score >= 5,  percent_modified > 10, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+
+FR1113N_r2_a_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113N_05_11_2025_rep3_ref.sorted_a.tsv") %>% dplyr::filter(score >= 5, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+FR1113N_r2_m_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113N_05_11_2025_rep3_ref.sorted_m.tsv") %>% dplyr::filter(score >= 5, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+FR1113N_r2_pseu_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113N_05_11_2025_rep3_ref.sorted_17802.tsv") %>% dplyr::filter(score >= 5, percent_modified > 10, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+
+FR1113N_r3_a_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113N_Oct_4_mRNA_induro.sorted_a.tsv") %>% dplyr::filter(score >= 5, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+FR1113N_r3_m_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113N_Oct_4_mRNA_induro.sorted_m.tsv") %>% dplyr::filter(score >= 5, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+FR1113N_r3_pseu_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113N_Oct_4_mRNA_induro.sorted_17802.tsv") %>% dplyr::filter(score >= 5, percent_modified > 10, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+
+colnames(FR1113N_r1_a_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(FR1113N_r1_m_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(FR1113N_r1_pseu_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+
+colnames(FR1113N_r2_a_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(FR1113N_r2_m_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(FR1113N_r2_pseu_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+
+
+colnames(FR1113N_r3_a_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(FR1113N_r3_m_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(FR1113N_r3_pseu_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand",
+  "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+```
+
+```{r}
+library(dplyr)
+
+# Combine replicates for each modification type
+FR_all_a <- bind_rows(FR1113N_r1_a_mRNA, FR1113N_r2_a_mRNA, FR1113N_r3_a_mRNA)
+FR_all_m <- bind_rows(FR1113N_r1_m_mRNA, FR1113N_r2_m_mRNA, FR1113N_r3_m_mRNA)
+FR_all_pseu <- bind_rows(FR1113N_r1_pseu_mRNA, FR1113N_r2_pseu_mRNA, FR1113N_r3_pseu_mRNA)
+
+# Count modification sites per gene
+FR_top_a_genes <- FR_all_a %>%
+  group_by(Gene_ID) %>%
+  summarise(n_sites = n()) %>%
+  arrange(desc(n_sites))
+
+FR_top_m_genes <- FR_all_m %>%
+  group_by(Gene_ID) %>%
+  summarise(n_sites = n()) %>%
+  arrange(desc(n_sites))
+
+FR_top_pseu_genes <- FR_all_pseu %>%
+  group_by(Gene_ID) %>%
+  summarise(n_sites = n()) %>%
+  arrange(desc(n_sites))
+
+head(FR_top_a_genes, 20)   # m6A-enriched
+head(FR_top_m_genes, 20)   # m5C-enriched
+head(FR_top_pseu_genes, 20) # Ψ-enriched
+
+```
+
+
+Mettl3-KO
+```{r}
+
+Mettl3_r1_a_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/Mettl3_KO_mRNA_RNA004.sorted_a.tsv") %>% dplyr::filter(score >= 5, percent_modified > 50, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+Mettl3_r1_m_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/Mettl3_KO_mRNA_RNA004.sorted_m.tsv") %>% dplyr::filter(score >= 5, percent_modified >= 50, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+Mettl3_r1_pseu_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/Mettl3_KO_mRNA_RNA004.sorted_17802.tsv") %>% dplyr::filter(score >= 5, percent_modified >= 50, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+
+Mettl3_r2_a_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/Mettl3_KO_mRNA_rep2.sorted_a.tsv") %>% dplyr::filter(score >= 5, percent_modified >= 50, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+Mettl3_r2_m_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/Mettl3_KO_mRNA_rep2.sorted_m.tsv") %>% dplyr::filter(score >= 5, percent_modified >= 50, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+Mettl3_r2_pseu_mRNA = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/Mettl3_KO_mRNA_rep2.sorted_17802.tsv") %>% dplyr::filter(score >= 5, percent_modified >= 50, Location != "N/A", Location != " ") %>% dplyr::select(-count_diff, -count_nocall, -valid_coverage)
+
+
+
+colnames(Mettl3_r1_a_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand", "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(Mettl3_r1_m_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand", "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(Mettl3_r1_pseu_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand", "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+
+colnames(Mettl3_r2_a_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand", "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(Mettl3_r2_m_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand", "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+colnames(Mettl3_r2_pseu_mRNA) <- c("chrom", "start", "end", "mod", "score", "strand", "percent_modified", "Gene_ID", "Transcript_IDs", "Transcript_Biotype", "Location")
+
+```
+
+
+```{r}
+library(dplyr)
+
+# Combine replicates for each modification type
+Mett_KO_all_a <- bind_rows(Mettl3_r1_a_mRNA, Mettl3_r2_a_mRNA)
+Mett_KO_all_m <- bind_rows(Mettl3_r1_m_mRNA, Mettl3_r2_m_mRNA)
+Mett_KO_pseu <- bind_rows(Mettl3_r1_pseu_mRNA, Mettl3_r2_pseu_mRNA)
+
+# Count modification sites per gene
+Mett_KO_top_a_genes <- Mett_KO_all_a %>%
+  group_by(Gene_ID) %>%
+  summarise(n_sites = n()) %>%
+  arrange(desc(n_sites))
+
+Mett_KO_top_m_genes <- Mett_KO_all_m %>%
+  group_by(Gene_ID) %>%
+  summarise(n_sites = n()) %>%
+  arrange(desc(n_sites))
+
+Mett_KO_top_pseu_genes <- Mett_KO_pseu %>%
+  group_by(Gene_ID) %>%
+  summarise(n_sites = n()) %>%
+  arrange(desc(n_sites))
+
+head(Mett_KO_top_a_genes, 20)   # m6A-enriched
+head(Mett_KO_top_m_genes, 20)   # m5C-enriched
+head(Mett_KO_top_pseu_genes, 20) # Ψ-enriched
+
+```
+
+
+# read length and kmer distribution
+```{r}
+W1118_r1_a_mRNA_kmer = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/W1118_induro_mRNA_2025_102.modkit.mod.a.tsv") %>%
+  dplyr::select(-any_of(c("read_id","forward_read_position","ref_position","chrom", "mod_strand","ref_strand","ref_mod_strand","fw_soft_clipped_start", "fw_soft_clipped_end","alignment_start","alignment_end", "inferred"))) %>%
+  mutate(call_prob = as.numeric(call_prob)) %>%
+  dplyr::filter(call_prob > 0)
+
+
+W1118_r1_m_mRNA_kmer = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/W1118_induro_mRNA_2025_102.modkit.mod.m.tsv") %>%
+  dplyr::select(-any_of(c("read_id","forward_read_position","ref_position","chrom", "mod_strand","ref_strand","ref_mod_strand","fw_soft_clipped_start", "fw_soft_clipped_end","alignment_start","alignment_end", "inferred"))) %>%
+  mutate(call_prob = as.numeric(call_prob)) %>%
+  dplyr::filter(call_prob > 0)
+
+
+W1118_r1_pseu_mRNA_kmer = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/W1118_induro_mRNA_2025_102.modkit.mod.17802.tsv") %>%
+  dplyr::select(-any_of(c("read_id","forward_read_position","ref_position","chrom", "mod_strand","ref_strand","ref_mod_strand","fw_soft_clipped_start", "fw_soft_clipped_end","alignment_start","alignment_end", "inferred"))) %>%
+  mutate(call_prob = as.numeric(call_prob)) %>%
+  dplyr::filter(call_prob > 0)
+```
+
+
+```{r}
+FR1113N_r1_a_mRNA_kmer = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113N_05_11_2025_rep2_ref.modkit.mod.a.tsv") %>%
+  dplyr::select(-any_of(c("read_id","forward_read_position","ref_position","chrom", "mod_strand","ref_strand","ref_mod_strand","fw_soft_clipped_start", "fw_soft_clipped_end","alignment_start","alignment_end", "inferred"))) %>%
+  mutate(call_prob = as.numeric(call_prob)) %>%
+  dplyr::filter(call_prob > 0)
+
+
+FR1113N_r1_m_mRNA_kmer = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113N_05_11_2025_rep2_ref.modkit.mod.m.tsv") %>%
+  dplyr::select(-any_of(c("read_id","forward_read_position","ref_position","chrom", "mod_strand","ref_strand","ref_mod_strand","fw_soft_clipped_start", "fw_soft_clipped_end","alignment_start","alignment_end", "inferred"))) %>%
+  mutate(call_prob = as.numeric(call_prob)) %>%
+  dplyr::filter(call_prob > 0)
+
+
+FR1113N_r1_pseu_mRNA_kmer = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113N_05_11_2025_rep2_ref.modkit.mod.17802.tsv") %>%
+  dplyr::select(-any_of(c("read_id","forward_read_position","ref_position","chrom", "mod_strand","ref_strand","ref_mod_strand","fw_soft_clipped_start", "fw_soft_clipped_end","alignment_start","alignment_end", "inferred"))) %>%
+  mutate(call_prob = as.numeric(call_prob)) %>%
+  dplyr::filter(call_prob > 0)
+```
+
+
+```{r}
+Mettl3_r1_a_mRNA_kmer = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/Mettl3_KO_mRNA_RNA004.modkit.mod.a.tsv") %>%
+  dplyr::select(-any_of(c("read_id","forward_read_position","ref_position","chrom", "mod_strand","ref_strand","ref_mod_strand","fw_soft_clipped_start", "fw_soft_clipped_end","alignment_start","alignment_end", "inferred"))) %>%
+  mutate(call_prob = as.numeric(call_prob)) %>%
+  dplyr::filter(call_prob > 0)
+
+Mettl3_r1_m_mRNA_kmer = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/Mettl3_KO_mRNA_RNA004.modkit.mod.m.tsv") %>%
+  dplyr::select(-any_of(c("read_id","forward_read_position","ref_position","chrom", "mod_strand","ref_strand","ref_mod_strand","fw_soft_clipped_start", "fw_soft_clipped_end","alignment_start","alignment_end", "inferred"))) %>%
+  mutate(call_prob = as.numeric(call_prob)) %>%
+  dplyr::filter(call_prob > 0)
+
+Mettl3_r1_pseu_mRNA_kmer = read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/Mettl3_KO_mRNA_RNA004.modkit.mod.17802.tsv")%>%
+  dplyr::select(-any_of(c("read_id","forward_read_position","ref_position","chrom", "mod_strand","ref_strand","ref_mod_strand","fw_soft_clipped_start", "fw_soft_clipped_end","alignment_start","alignment_end","inferred"))) %>%
+  mutate(call_prob = as.numeric(call_prob)) %>%
+  dplyr::filter(call_prob > 0)
+```
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+W1118_r1_a_mRNA_kmer  <- W1118_r1_a_mRNA_kmer  %>% mutate(call_code = as.character(call_code))
+W1118_r1_m_mRNA_kmer  <- W1118_r1_m_mRNA_kmer  %>% mutate(call_code = as.character(call_code))
+W1118_r1_pseu_mRNA_kmer <- W1118_r1_pseu_mRNA_kmer %>% mutate(call_code = as.character(call_code))
+
+FR1113N_r1_a_mRNA_kmer <- FR1113N_r1_a_mRNA_kmer %>% mutate(call_code = as.character(call_code))
+FR1113N_r1_m_mRNA_kmer <- FR1113N_r1_m_mRNA_kmer %>% mutate(call_code = as.character(call_code))
+FR1113N_r1_pseu_mRNA_kmer <- FR1113N_r1_pseu_mRNA_kmer %>% mutate(call_code = as.character(call_code))
+
+Mettl3_r1_a_mRNA_kmer <- Mettl3_r1_a_mRNA_kmer %>% mutate(call_code = as.character(call_code))
+Mettl3_r1_m_mRNA_kmer <- Mettl3_r1_m_mRNA_kmer %>% mutate(call_code = as.character(call_code))
+Mettl3_r1_pseu_mRNA_kmer <- Mettl3_r1_pseu_mRNA_kmer %>% mutate(call_code = as.character(call_code))
+
+
+all_reads_pass_m6A <- bind_rows(
+  W1118_r1_a_mRNA_kmer  %>% mutate(sample="w1118", mod="a"),
+  #W1118_r1_m_mRNA_kmer  %>% mutate(sample="W1118_induro", mod="m"),
+  #W1118_r1_pseu_mRNA_kmer %>% mutate(sample="W1118_induro", mod="17802"),
+  FR1113N_r1_a_mRNA_kmer %>% mutate(sample="FR113N", mod="a"),
+  #FR1113N_r1_m_mRNA_kmer %>% mutate(sample="FR113N", mod="m"),
+  #FR1113N_r1_pseu_mRNA_kmer %>% mutate(sample="FR113N", mod="17802"),
+  Mettl3_r1_a_mRNA_kmer %>% mutate(sample="Mettl3-KO", mod="a")) %>%
+  #Mettl3_r1_m_mRNA_kmer %>% mutate(sample="Mettl3_KO", mod="m"),
+  #Mettl3_r1_pseu_mRNA_kmer %>% mutate(sample="Mettl3_KO", mod="17802")) %>%
+  mutate(call_prob = as.numeric(call_prob),
+         sample = factor(sample, levels = c("w1118","FR113N","Mettl3-KO"),
+                    labels = c("w1118","FR113N","Mettl3-KO")),
+    read_length = as.numeric(read_length)) %>%
+  dplyr::filter(!is.na(read_length), read_length > 0, fail == "false")
+
+cols <- c("w1118" = "#1b9e77", "FR113N" = "#d95f02", "Mettl3-KO" = "#7570b3")
+
+read_length_a <- ggplot(all_reads_pass_m6A, aes(x = mod, y = read_length, fill = sample)) +
+  geom_violin(scale = "width", trim = TRUE, linewidth = 0.3, width = 0.9) +
+  geom_boxplot(width = 0.15, outlier.shape = NA, linewidth = 0.3, fill = "white", alpha = 0.6) +
+  facet_wrap(~ sample, nrow = 1, scales = "free_x") +
+  scale_y_log10(labels = label_comma()) +
+  scale_fill_manual(values = cols, guide = "none") +
+  labs(title = "Read length distributions (pass calls only)", x = "Modification", y = "Read length (bp, log10)") +
+  theme_bw(base_size = 12) + theme_classic() +
+  theme(panel.grid.minor = element_blank(), strip.background = element_rect(fill = "grey95", colour = NA), strip.text = element_text(face = "bold"), plot.title = element_text(face = "bold", hjust = 0)) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(plot.title= element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title= element_text(size = 12),
+    axis.text = element_text(size = 12),
+    axis.text.x = element_text(hjust = 1),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    legend.text  = element_text(size = 12, family = "Times New Roman")) 
+
+
+```
+
+
+
+
+
+```{r}
+all_reads_pass_m5C <- bind_rows(
+  W1118_r1_m_mRNA_kmer  %>% mutate(sample="w1118", mod="m"),
+  FR1113N_r1_m_mRNA_kmer %>% mutate(sample="FR113N", mod="m"), 
+  Mettl3_r1_m_mRNA_kmer %>% mutate(sample="Mettl3-KO", mod="m")) %>%
+  mutate(call_prob = as.numeric(call_prob),
+         sample = factor(sample, levels = c("w1118","FR113N","Mettl3-KO"),
+                    labels = c("w1118","FR113N","Mettl3-KO")),
+    read_length = as.numeric(read_length)) %>%
+  dplyr::filter(!is.na(read_length), read_length > 0, fail == "false")
+
+cols <- c("w1118" = "#1b9e77", "FR113N" = "#d95f02", "Mettl3-KO" = "#7570b3")
+
+ggplot(all_reads_pass_m5C, aes(x = mod, y = read_length, fill = sample)) +
+  geom_violin(scale = "width", trim = TRUE, linewidth = 0.3, width = 0.9) +
+  geom_boxplot(width = 0.15, outlier.shape = NA, linewidth = 0.3, fill = "white", alpha = 0.6) +
+  facet_wrap(~ sample, nrow = 1, scales = "free_x") +
+  scale_y_log10(labels = label_comma()) +
+  scale_fill_manual(values = cols, guide = "none") +
+  labs(title = "Read length distributions (pass calls only)", x = "Modification", y = "Read length (bp, log10)") +
+  theme_bw(base_size = 12) + theme_classic() +
+  theme(panel.grid.minor = element_blank(), strip.background = element_rect(fill = "grey95", colour = NA), strip.text = element_text(face = "bold"), plot.title = element_text(face = "bold", hjust = 0))
+```
+
+
+# kmer distribution
+
+```{r}
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(forcats)
+library(scales)
+
+m5C_kmers <- all_reads_pass_m5C %>%
+  filter(fail == "false", !is.na(query_kmer), query_kmer != ".") %>%
+  mutate(kmer = toupper(query_kmer),
+    # ensure exactly 5 bases A/C/G/T
+    kmer = if_else(str_detect(kmer, "^[ACGT]{5}$"), kmer, NA_character_)) %>%
+  dplyr::filter(!is.na(kmer)) %>%
+  mutate(is_DRACH = str_detect(kmer, "^[AGT][AG]A[CT][ACT]$"),
+    motif = if_else(is_DRACH, "DRACH", "Other"))
+
+
+topk <- m5C_kmers %>%
+  count(sample, kmer, motif, sort = TRUE) %>%
+  group_by(sample) %>%
+  slice_max(n, n = 20, with_ties = FALSE) %>%
+  ungroup() %>%
+  group_by(sample) %>%
+  mutate(kmer = fct_reorder(kmer, n)) %>%
+  ungroup()
+
+m5C_Kmer <- ggplot(topk, aes(x = kmer, y = n, fill = motif)) +
+  geom_col() + coord_flip() +
+  facet_wrap(~ sample, nrow = 1, scales = "free_x") +
+  scale_fill_manual(values = c("DRACH" = "#e41a1c", "Other" = "purple")) +
+  labs(title = "Top 10 kmers at m6A call sites (DRACH highlighted)", x = "k-mer (center base = called m)", y = "Count", fill = "Motif class") +
+  theme_bw(base_size = 12) + theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 12),
+        legend.position = "right", size = 12,
+        legend.text=element_text(size=12, family = "Times New Roman"))
+
+m5C_Kmer
+```
+
+```{r}
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(forcats)
+library(scales)
+
+m6A_kmers <- all_reads_pass_m6A %>%
+  filter(fail == "false", !is.na(query_kmer), query_kmer != ".") %>%
+  mutate(kmer = toupper(query_kmer),
+    # ensure exactly 5 bases A/C/G/T
+    kmer = if_else(str_detect(kmer, "^[ACGT]{5}$"), kmer, NA_character_)) %>%
+  dplyr::filter(!is.na(kmer)) %>%
+  mutate(is_DRACH = str_detect(kmer, "^[AGT][AG]A[CT][ACT]$"),
+    motif = if_else(is_DRACH, "DRACH", "Other"))
+
+
+topk <- m6A_kmers %>%
+  count(sample, kmer, motif, sort = TRUE) %>%
+  group_by(sample) %>%
+  slice_max(n, n = 500, with_ties = FALSE) %>%
+  ungroup() %>%
+  group_by(sample) %>%
+  mutate(kmer = fct_reorder(kmer, n)) %>%
+  ungroup()
+
+kmer_m6a <- ggplot(topk, aes(x = kmer, y = n, fill = motif)) +
+  geom_col() + coord_flip() +
+  facet_wrap(~ sample, nrow = 1, scales = "free_x") +
+  scale_fill_manual(values = c("DRACH" = "#e41a1c", "Other" = "grey70")) +
+  labs(title = "Top 10 kmers at m6A call sites (DRACH highlighted)", x = "k-mer (center base = called A)", y = "Count", fill = "Motif class") +
+  theme_bw(base_size = 12) + theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 12),
+        legend.position = "right", size = 12,
+        legend.text=element_text(size=12, family = "Times New Roman"))
+
+kmer_m6a
+```
+
+
+
+
+```{r}
+library(GenomicRanges)
+library(reshape2)
+library(ggplot2)
+
+# helper: make unique genomic coordinate keys
+keys <- function(gr) unique(paste0(seqnames(gr), ":", start(gr), "-", end(gr), ":", strand(gr)))
+
+# Jaccard for exact sites
+jaccard_sites <- function(A, B){
+  a <- keys(A); b <- keys(B)
+  length(intersect(a, b)) / length(union(a, b))
+}
+
+
+psi_list <- list(
+  W1118_R1 = W1118_Rep1_psi,
+  W1118_R2 = W1118_Rep2_psi,
+  W1118_R3 = W1118_Rep3_psi,
+  FR113_R1 = FR113_Rep1_psi,
+  FR113_R2 = FR113_Rep2_psi)
+
+# compute pairwise Jaccard
+n <- length(psi_list)
+jac_mat <- matrix(NA, nrow = n, ncol = n, dimnames = list(names(psi_list), names(psi_list)))
+
+for(i in 1:n){
+  for(j in 1:n){
+    jac_mat[i, j] <- jaccard_sites(psi_list[[i]], psi_list[[j]])
+  }
+}
+
+# melt for ggplot
+jac_df <- melt(jac_mat, varnames = c("Set1","Set2"), value.name = "Jaccard")
+
+# plot heatmap
+ggplot(jac_df, aes(x = Set1, y = Set2, fill = Jaccard)) +
+  geom_tile() +
+  geom_text(aes(label = round(Jaccard, 3)), color = "black", size = 3) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=45, hjust=1)) +
+  ggtitle("Pairwise Jaccard Index – Pseudouridine Sites")
+
+
+```
+
+
+# Percent modified across all psi data sets
+```{r}
+library(dplyr)
+library(ggplot2)
+library(rstatix)
+library(ggpubr)
+
+
+df_all <- bind_rows(
+  W118_r1_pseu_filtered  %>% mutate(sample = "W1118_R1"),
+  W118_r2_pseu_filtered  %>% mutate(sample = "W1118_R2"),
+  W118_r3_pseu_filtered  %>% mutate(sample = "W1118_R3"),
+  FR113_rep1_pseu_filtered %>% mutate(sample = "FR113_R1"),
+  FR113_rep2_pseu_filtered %>% mutate(sample = "FR113_R2"))
+
+
+df_all$sample <- factor(df_all$sample, 
+                        levels = c("W1118_R1","W1118_R2","W1118_R3","FR113_R1","FR113_R2"))
+
+# 2. Pairwise Wilcoxon tests
+stat.test <- df_all %>%
+  pairwise_wilcox_test(percent_modified ~ sample, p.adjust.method = "BH")
+
+stat.test <- stat.test %>%
+  add_xy_position(x = "sample")
+
+
+ggplot(df_all, aes(x = sample, y = percent_modified, fill = sample)) +
+  geom_violin(trim = FALSE, alpha = 0.4, color = NA) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.6) +
+  theme_minimal() +
+  labs(x = "", y = "% modified", title = "Percent Modified per Dataset (Pseudouridine)") +
+  theme(axis.text.x = element_text(angle=45, hjust=1), legend.position = "none") +
+  stat_pvalue_manual(stat.test, label = "p.adj.signif", tip.length = 0.01) + theme_classic()
+
+```
+
+
+
+
+
+# Percent modified across all m5C data sets
+```{r}
+library(dplyr)
+library(ggplot2)
+library(rstatix)
+library(ggpubr)
+
+
+df_all <- bind_rows(
+  W118_r1_m_filtered  %>% mutate(sample = "W1118_R1"),
+  W118_r2_m_filtered  %>% mutate(sample = "W1118_R2"),
+  W118_r3_m_filtered  %>% mutate(sample = "W1118_R3"),
+  FR113_rep1_m_filtered %>% mutate(sample = "FR113_R1"),
+  FR113_rep2_m_filtered %>% mutate(sample = "FR113_R2"))
+
+
+df_all$sample <- factor(df_all$sample, 
+                        levels = c("W1118_R1","W1118_R2","W1118_R3","FR113_R1","FR113_R2"))
+
+# 2. Pairwise Wilcoxon tests
+stat.test <- df_all %>%
+  pairwise_wilcox_test(percent_modified ~ sample, p.adjust.method = "BH")
+
+stat.test <- stat.test %>%
+  add_xy_position(x = "sample")
+
+
+ggplot(df_all, aes(x = sample, y = percent_modified, fill = sample)) +
+  geom_violin(trim = FALSE, alpha = 0.4, color = NA) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.6) +
+  theme_minimal() +
+  labs(x = "", y = "% modified", title = "Percent Modified per Dataset (m5c)") +
+  theme(axis.text.x = element_text(angle=45, hjust=1), legend.position = "none") +
+  stat_pvalue_manual(stat.test, label = "p.adj.signif", tip.length = 0.01) + theme_classic()
+
+```
+
+
+```{r}
+## ---- packages ----
+library(dplyr)
+library(ggplot2)
+library(rstatix)   # pairwise_wilcox_test, add_xy_position
+library(ggpubr)    # stat_pvalue_manual
+library(GenomicRanges)
+library(tidyr)
+library(patchwork)
+
+## ---- 0) assemble data ----
+# PSEUDOURIDINE filtered data frames should already exist:
+# W118_r1_pseu_filtered, W118_r2_pseu_filtered, W118_r3_pseu_filtered,
+# FR113_rep1_pseu_filtered, FR113_rep2_pseu_filtered
+
+df_all <- bind_rows(
+  W118_r1_pseu_filtered      %>% mutate(sample = "W1118_R1", strain="W1118"),
+  W118_r2_pseu_filtered      %>% mutate(sample = "W1118_R2", strain="W1118"),
+  W118_r3_pseu_filtered      %>% mutate(sample = "W1118_R3", strain="W1118"),
+  FR113_rep1_pseu_filtered   %>% mutate(sample = "FR113_R1",  strain="FR113"),
+  FR113_rep2_pseu_filtered   %>% mutate(sample = "FR113_R2",  strain="FR113"))
+
+df_all$sample <- factor(df_all$sample,
+  levels = c("W1118_R1","W1118_R2","W1118_R3","FR113_R1","FR113_R2"))
+df_all$strain <- factor(df_all$strain, levels=c("W1118","FR113"))
+
+## ---- A) violin + box + medians + reduced brackets ----
+# Pairwise Wilcoxon (BH) and keep only desired comparisons:
+all_stats <- pairwise_wilcox_test(df_all, percent_modified ~ sample, p.adjust.method = "BH")
+
+# Keep: within-strain (W1118 triples + FR113 pair) + one representative between-strain
+keep_pairs <- tribble(
+  ~group1,     ~group2,
+  "W1118_R1",  "W1118_R2",
+  "W1118_R1",  "W1118_R3",
+  "W1118_R2",  "W1118_R3",
+  "FR113_R1",  "FR113_R2",
+  "W1118_R2",  "FR113_R1")
+
+stat.keep <- all_stats %>%
+  semi_join(keep_pairs, by=c("group1","group2")) %>%
+  add_xy_position(x="sample")
+
+# Medians per sample for labels
+meds <- df_all %>% group_by(sample) %>%
+  summarize(median_pm = median(percent_modified, na.rm=TRUE), .groups="drop")
+
+pA <- ggplot(df_all, aes(x=sample, y=percent_modified, fill=strain)) +
+  geom_violin(trim=FALSE, alpha=0.35, color=NA) +
+  geom_boxplot(width=0.22, outlier.shape=NA, alpha=0.7) +
+  geom_text(data=meds, aes(x=sample, y=median_pm, label=sprintf("med=%.1f", median_pm)),
+            vjust=-0.6, size=3, inherit.aes=FALSE) +
+  stat_pvalue_manual(stat.keep, label="p.adj.signif", tip.length=0.01, step.increase=0.07) +
+  scale_x_discrete(labels=function(x) gsub("_", "\n", x)) +
+  labs(title="A  Percent Modified per Dataset (Pseudouridine)",
+       x=NULL, y="% modified", fill="Population") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position="top",
+        axis.text.x = element_text(hjust=0.5))
+
+## ---- B) Jaccard heatmap (exact site keys) ----
+keys <- function(df) unique(paste(df$chrom, df$start, df$end, df$strand, sep=":"))
+
+sets <- list(
+  W1118_R1 = keys(W118_r1_pseu_filtered),
+  W1118_R2 = keys(W118_r2_pseu_filtered),
+  W1118_R3 = keys(W118_r3_pseu_filtered),
+  FR113_R1 = keys(FR113_rep1_pseu_filtered),
+  FR113_R2 = keys(FR113_rep2_pseu_filtered))
+
+jaccard_sites <- function(a,b) length(intersect(a,b)) / length(union(a,b))
+
+labs <- names(sets); n <- length(sets)
+jac_mat <- matrix(NA_real_, n, n, dimnames=list(labs, labs))
+for(i in seq_len(n)) for(j in seq_len(n))
+  jac_mat[i,j] <- jaccard_sites(sets[[i]], sets[[j]])
+
+jac_df <- as.data.frame(as.table(jac_mat))
+colnames(jac_df) <- c("Set1","Set2","Jaccard")
+
+pB <- ggplot(jac_df, aes(Set1, Set2, fill=Jaccard)) +
+  geom_tile() +
+  geom_text(aes(label=sprintf("%.3f", Jaccard)), size=3) +
+  scale_fill_gradient(low="white", high="steelblue") +
+  labs(title="B  Pairwise Jaccard Index — Pseudouridine Sites", x=NULL, y=NULL) +
+  theme_minimal(base_size=11) +
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        legend.position="right")
+
+## ---- C) Representative between-strain scatter (shared sites) ----
+# Choose the pair here (feel free to change):
+left_df  <- W118_r2_pseu_filtered     # W1118_R2
+right_df <- FR113_rep1_pseu_filtered  # FR113_R1
+
+dfL <- left_df  %>% mutate(key=paste(chrom,start,end,strand,sep=":")) %>%
+  select(key, L = percent_modified)
+dfR <- right_df %>% mutate(key=paste(chrom,start,end,strand,sep=":")) %>%
+  select(key, R = percent_modified)
+shared <- inner_join(dfL, dfR, by="key")
+
+rho <- suppressWarnings(cor(shared$L, shared$R, method="spearman", use="complete.obs"))
+npts <- nrow(shared)
+
+pC <- ggplot(shared, aes(L, R)) +
+  geom_abline(slope=1, intercept=0, linetype="dashed") +
+  geom_point(alpha=0.5, size=1.2) +
+  labs(title=sprintf("C  %% Modified at Shared Sites\nW1118_R2 vs FR113_R1 (Spearman = %.2f, n = %d)", rho, npts),
+       x="W1118_R2 % modified", y="FR113_R1 % modified") +
+  theme_minimal(base_size=11)
+
+## ---- layout + save ----
+# Arrange: A and B side-by-side on top, C below
+final <- (pA | pB) / pC + plot_layout(heights = c(1, 0.9))
+
+# Display
+final
+
+```
+
+
+
+```{r}
+## ---- packages ----
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(readr)
+library(forcats)
+library(patchwork)
+
+## ---- 0) combine + clean ----
+clean_na <- function(x) ifelse(x %in% c("NA","N/A",""), NA, x)
+
+df_all <- bind_rows(
+  W118_r1_pseu_filtered    %>% mutate(sample="W1118_R1", Population="W1118"),
+  W118_r2_pseu_filtered    %>% mutate(sample="W1118_R2", Population="W1118"),
+  W118_r3_pseu_filtered    %>% mutate(sample="W1118_R3", Population="W1118"),
+  FR113_rep1_pseu_filtered %>% mutate(sample="FR113_R1",  Population="FR113"),
+  FR113_rep2_pseu_filtered %>% mutate(sample="FR113_R2",  Population="FR113")) %>%
+  mutate(Gene_ID = clean_na(Gene_ID),
+    Transcript_IDs = clean_na(Transcript_IDs),
+    key = paste(chrom, start, end, strand, sep=":"))
+
+df_all$sample <- factor(df_all$sample,
+  levels=c("W1118_R1","W1118_R2","W1118_R3","FR113_R1","FR113_R2"))
+df_all$Population <- factor(df_all$Population, levels=c("W1118","FR113"))
+
+## =========================================================
+## A) Per-chromosome summary (from mod files only)
+##    - A1: Proportion of unique sites per chromosome (stacked by sample)
+##    - A2: Median % modified per chromosome (points)
+## =========================================================
+per_chr_sample <- df_all %>%
+  summarise(
+    n_unique_sites = n_distinct(key),
+    med_pm = median(percent_modified, na.rm=TRUE),
+    .by = c(sample, Population, chrom))
+
+# Order chromosomes by total sites across all samples (nice consistent x-axis)
+chrom_order <- per_chr_sample %>%
+  summarise(tot = sum(n_unique_sites), .by = chrom) %>%
+  arrange(desc(tot)) %>% pull(chrom)
+per_chr_sample$chrom <- factor(per_chr_sample$chrom, levels = chrom_order)
+
+# A1: proportion (per sample)
+prop_chr <- per_chr_sample %>%
+  group_by(sample) %>%
+  mutate(prop = n_unique_sites / sum(n_unique_sites)) %>%
+  ungroup()
+
+pA1 <- ggplot(prop_chr, aes(x=sample, y=prop, fill=chrom)) +
+  geom_col(width=0.8) +
+  scale_y_continuous(labels=scales::percent_format(accuracy=1)) +
+  labs(title="A1  Chromosome contribution to unique sites (proportion)",
+       x=NULL, y="Proportion of sites", fill="Chrom") +
+  theme_minimal(base_size=11) +
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+
+# A2: median % modified per chromosome (points, faceted by sample)
+pA2 <- ggplot(per_chr_sample, aes(x=chrom, y=med_pm, group=1)) +
+  geom_point() +
+  geom_line(alpha=0.3) +
+  facet_wrap(~ sample, nrow=1, scales="free_x") +
+  labs(title="A2  Median % modified per chromosome (per sample)",
+       x="Chromosome", y="Median % modified") +
+  theme_minimal(base_size=11) +
+  theme(axis.text.x = element_text(angle=45, hjust=1))
+
+pA <- pA1 / pA2 + plot_layout(heights=c(1,1.1))
+
+## =========================================================
+## B) Gene-level frequency: top genes by unique sites (stacked by Population)
+## =========================================================
+gene_totals <- df_all %>%
+  filter(!is.na(Gene_ID)) %>%
+  summarise(n_sites = n_distinct(key), .by = Gene_ID) %>%
+  arrange(desc(n_sites))
+
+topN <- 50  # change if you want more/less
+top_genes <- gene_totals %>% slice_head(n = topN) %>% pull(Gene_ID)
+
+gene_by_Population <- df_all %>%
+  filter(!is.na(GGene_ID <- Gene_ID), Gene_ID %in% top_genes) %>%
+  summarise(n_sites = n_distinct(key), .by = c(Gene_ID, Population))
+
+# order bars by total across Populations
+order_genes <- gene_by_Population %>%
+  summarise(tot = sum(n_sites), .by = Gene_ID) %>%
+  arrange(tot) %>% pull(Gene_ID)
+gene_by_Population$Gene_ID <- factor(gene_by_Population$Gene_ID, levels = order_genes)
+
+pB <- ggplot(gene_by_Population, aes(x=Gene_ID, y=n_sites, fill=Population)) +
+  geom_col(position="stack") +
+  coord_flip() +
+  labs(title=sprintf("  Top %d genes by unique pseudouridine sites", topN),
+       x=NULL, y="# unique sites (stacked by Population)", fill="Population") +
+  theme_minimal(base_size=11)
+
+## =========================================================
+## C) Site support distribution (1..5 datasets)
+##    - C1 overall
+##    - C2 per Population (W1118 has 3 reps, FR113 has 2)
+## =========================================================
+# Overall across all five datasets
+support_overall <- df_all %>%
+  distinct(key, sample) %>%
+  count(key, name="n_datasets") %>%
+  count(n_datasets, name="n_sites") %>%
+  arrange(n_datasets)
+
+pC1 <- ggplot(support_overall, aes(x=factor(n_datasets), y=n_sites)) +
+  geom_col() +
+  geom_text(aes(label=n_sites), vjust=-0.3, size=3) +
+  labs(title="C1  Site support across all datasets",
+       x="# datasets (out of 5)", y="# unique sites") +
+  theme_minimal(base_size=11)
+
+# Per Population (within-Population support)
+support_by_Population <- df_all %>%
+  distinct(key, Population, sample) %>%
+  count(Population, key, name="n_in_Population") %>%
+  count(Population, n_in_Population, name="n_sites") %>%
+  arrange(Population, n_in_Population)
+
+pC2 <- ggplot(support_by_Population,
+              aes(x=factor(n_in_Population), y=n_sites)) +
+  geom_col() +
+  geom_text(aes(label=n_sites), vjust=-0.3, size=3) +
+  facet_wrap(~ Population, nrow=1, scales="free_y") +
+  labs(title="C2  Site support within each Population",
+       x="# datasets within Population", y="# unique sites") +
+  theme_minimal(base_size=11)
+
+pC <- pC1 / pC2 + plot_layout(heights=c(1,1))
+
+## ---- assemble + save ----
+final_stats_panel <- pA | (pB / pC) + plot_layout(widths=c(1.1,1))
+
+final_stats_panel
+
+
+```
+
+
+
+# Novel isoforms and transcripts
+```{r}
+library(GenomicFeatures)
+library(GenomicRanges)
+library(dplyr)
+
+
+txdb <- makeTxDbFromGFF("~/Dropbox/all_files/dm6_new.gtf", format = "gtf")
+genes_gr <- genes(txdb)
+exons_gr <- exons(txdb)
+
+# Convert filtered peak data frames to GRanges
+convert_to_gr <- function(df) {
+  GRanges(
+    seqnames = df$chrom,
+    ranges = IRanges(start = df$start, end = df$end),
+    strand = df$strand,
+    score = df$score,
+    mod = df$mod,
+    percent_modified = df$percent_modified,
+    gene_id = df$Gene_ID,
+    location = df$Location)
+}
+
+# List of all peak files
+peak_files <- list(
+  W118_r1_a_filtered, W118_r1_m_filtered, W118_r1_pseu_filtered,
+  W118_r2_a_filtered, W118_r2_m_filtered, W118_r2_pseu_filtered,
+  W118_r3_a_filtered, W118_r3_m_filtered, W118_r3_pseu_filtered,
+  FR113_rep1_a_filtered, FR113_rep1_m_filtered, FR113_rep1_pseu_filtered,
+  FR113_rep2_a_filtered, FR113_rep2_m_filtered, FR113_rep2_pseu_filtered)
+
+names(peak_files) <- c(
+  "W118_r1_a", "W118_r1_m", "W118_r1_pseu",
+  "W118_r2_a", "W118_r2_m", "W118_r2_pseu",
+  "W118_r3_a", "W118_r3_m", "W118_r3_pseu",
+  "FR113_r1_a", "FR113_r1_m", "FR113_r1_pseu",
+  "FR113_r2_a", "FR113_r2_m", "FR113_r2_pseu")
+
+# --- Identify novel genes and isoforms ---
+results <- lapply(peak_files, function(df) {
+  peaks_gr <- convert_to_gr(df)
+  
+  # Novel gene: no overlap with any known gene
+  is_novel_gene <- countOverlaps(peaks_gr, genes_gr) == 0
+  novel_gene_peaks <- peaks_gr[is_novel_gene]
+  
+  # Novel isoform: overlaps gene, but not any exon
+  overlaps_gene <- countOverlaps(peaks_gr, genes_gr) > 0
+  not_exon <- countOverlaps(peaks_gr, exons_gr) == 0
+  novel_isoform_peaks <- peaks_gr[overlaps_gene & not_exon]
+  
+  list(novel_genes = novel_gene_peaks,
+    novel_isoforms = novel_isoform_peaks,
+    known_peaks = peaks_gr[!is_novel_gene & !not_exon])
+})
+
+
+sapply(results, function(x) length(x$novel_genes))
+sapply(results, function(x) length(x$novel_isoforms))
+
+
+# Function to combine novel gene peaks across replicates for a given group & modification
+get_combined_novel_genes <- function(results, pattern) {
+  matched <- results[grepl(pattern, names(results))]
+  nonempty <- lapply(matched, function(x) x$novel_genes)
+  nonempty <- nonempty[sapply(nonempty, function(gr) inherits(gr, "GRanges") && length(gr) > 0)]
+  if (length(nonempty) == 0) return(GenomicRanges::GRanges())
+  do.call(c, nonempty)
+}
+
+
+# --- FR113 ---
+FR113_a_novel_genes   <- get_combined_novel_genes(results, "FR113.*_a")
+FR113_pseu_novel_genes <- get_combined_novel_genes(results, "FR113.*_pseu")
+FR113_m5C_novel_genes  <- get_combined_novel_genes(results, "FR113.*_m")
+
+# --- W1118 ---
+W1118_a_novel_genes   <- get_combined_novel_genes(results, "W118.*_a")
+W1118_pseu_novel_genes <- get_combined_novel_genes(results, "W118.*_pseu")
+W1118_m5C_novel_genes  <- get_combined_novel_genes(results, "W118.*_m")
+
+
+# Updated function including mod and percent_modified
+write_novel_bed <- function(gr, filename) {
+  if (length(gr) == 0) {
+    message("Skipping empty file: ", filename)
+    return()
+  }
+
+  df <- data.frame(
+    chrom = as.character(seqnames(gr)),
+    start = start(gr),
+    end = end(gr),
+    strand = as.character(strand(gr)),
+    mod = mcols(gr)$mod,
+    percent_modified = mcols(gr)$percent_modified)
+
+  write.table(df, file = filename, quote = FALSE, sep = "\t",
+              row.names = FALSE, col.names = FALSE)
+}
+
+# --- Write all 6 BED files ---
+#write_novel_bed(do.call(c, FR113_a_novel_genes), "FR113_a_novel_genes.bed")
+
+#write_novel_bed(FR113_a_novel_genes,  "FR113_a_novel_genes.bed")
+#write_novel_bed(FR113_pseu_novel_genes,"FR113_pseu_novel_genes.bed")
+#write_novel_bed(FR113_m5C_novel_genes, "FR113_m5C_novel_genes.bed")
+
+#write_novel_bed(W1118_a_novel_genes,   "W1118_a_novel_genes.bed")
+#write_novel_bed(W1118_pseu_novel_genes,"W1118_pseu_novel_genes.bed")
+#write_novel_bed(W1118_m5C_novel_genes, "W1118_m5C_novel_genes.bed")
+
+
+#rtracklayer::export.bed(results[["W118_r1_a"]]$novel_genes, "W118_r1_a_novelGenes.bed")
+
+```
+
+```{r}
+Head = read.delim("~/Dropbox/all_files/new_peak_files_java/all_macs2_call_diff_star_mapped/mettl3_vs_wt_minus_cond2.tsv")
+
+all_W1118_dRNA_genes <- unique(c(
+  W118_r1_a_filtered$Gene_ID,
+  W118_r2_a_filtered$Gene_ID,
+  W118_r3_a_filtered$Gene_ID))
+
+validated_genes = Head |>
+  filter(Gene_ID %in% all_W1118_dRNA_genes)
+
+combined.W1118.dRNA <- bind_rows(
+  mutate(W118_r1_a_filtered, replicate = "Rep1"),
+  mutate(W118_r2_a_filtered, replicate = "Rep2"),
+  mutate(W118_r3_a_filtered, replicate = "Rep3"))
+
+columns_of_interest <- c("Gene_ID", "mod", "percent_modified", "score", "Transcript_IDs", "Transcript_Biotype", "Location", "replicate")
+
+validated_genes_annotated <- validated_genes |>
+  left_join(combined.W1118.dRNA |> 
+              dplyr::select(all_of(columns_of_interest)), by = "Gene_ID")
+
+
+validated_genes_top <- validated_genes_annotated %>%
+  group_by(Gene_ID) %>%
+  slice_max(order_by = fold_enrichment, n = 1, with_ties = FALSE) %>%
+  ungroup()
+```
+
+
+
+### Sanity check read coverage for modified sites:
+
+Genes with lower percent_modified values tend to have higher read coverage (scores).
+
+
+More Reads = More Unmodified Observations
+percent_modified = modified_reads / total_reads × 100
+
+For high-coverage genes, we're sampling more biological variability:
+
+More chance to detect unmodified transcripts
+
+Even if many reads are modified, a larger denominator lowers % value
+
+| Gene              | Modified Reads | Total Reads | % Modified |
+| ----------------- | -------------- | ----------- | ---------- |
+| A (low coverage)  | 9              | 10          | 90%        |
+| B (high coverage) | 90             | 300         | 30%        |
+So even though Gene B has more modified reads, the percent is lower due to more total reads (better transcript representation).
+```{r}
+
+add_metadata <- function(df, sample, modification) {
+  df %>%
+    mutate(Sample = sample, Modification = modification) %>%
+    dplyr::select(-mod)
+}
+
+
+
+combined_data <- bind_rows(
+  add_metadata(W1118_r1_a_mRNA, "W1118 Rep1 m6A", "m6A"),
+  add_metadata(W1118_r1_m_mRNA, "W1118 Rep1 m5C", "m5C"),
+  add_metadata(W1118_r1_pseu_mRNA, "W1118 Rep1 Ψ", "Ψ"),
+  
+  add_metadata(W1118_r2_a_mRNA, "W1118 Rep2 m6A", "m6A"),
+  add_metadata(W1118_r2_m_mRNA, "W1118 Rep2 m5C", "m5C"),
+  add_metadata(W1118_r2_pseu_mRNA, "W1118 Rep2 Ψ", "Ψ"),
+  
+  add_metadata(W1118_r3_a_mRNA, "W1118 Rep3 m6A", "m6A"),
+  add_metadata(W1118_r3_m_mRNA, "W1118 Rep3 m5C", "m5C"),
+  add_metadata(W1118_r3_pseu_mRNA, "W1118 Rep3 Ψ", "Ψ"),
+  
+  add_metadata(FR1113N_r1_a_mRNA, "FR113N Rep1 m6A", "m6A"),
+  add_metadata(FR1113N_r1_m_mRNA, "FR113N Rep1 m5C", "m5C"),
+  add_metadata(FR1113N_r1_pseu_mRNA, "FR113N Rep1 Ψ", "Ψ"),
+  
+  add_metadata(FR1113N_r2_a_mRNA, "FR113N Rep2 m6A", "m6A"),
+  add_metadata(FR1113N_r2_m_mRNA, "FR113N Rep2 m5C", "m5C"),
+  add_metadata(FR1113N_r2_pseu_mRNA, "FR113N Rep2 Ψ", "Ψ"),
+  
+  add_metadata(FR1113N_r3_a_mRNA, "FR113N Rep2 m6A", "m6A"),
+  add_metadata(FR1113N_r3_m_mRNA, "FR113N Rep2 m5C", "m5C"),
+  add_metadata(FR1113N_r3_pseu_mRNA, "FR113N Rep2 Ψ", "Ψ"), 
+  
+  add_metadata(Mettl3_r1_a_mRNA, "Mettl3-KO Rep1 m6A", "m6A"),
+  add_metadata(Mettl3_r1_m_mRNA, "Mettl3-KO Rep1 m5C", "m5C"),
+  add_metadata(Mettl3_r1_pseu_mRNA, "Mettl3-KO Rep1 Ψ", "Ψ"),
+  add_metadata(Mettl3_r2_a_mRNA, "Mettl3-KO Rep2 m6A", "m6A"),
+  add_metadata(Mettl3_r2_m_mRNA, "Mettl3-KO Rep2 m5C", "m5C"),
+  add_metadata(Mettl3_r2_pseu_mRNA, "Mettl3-KO Rep2 Ψ", "Ψ"))
+
+
+combined_data$Modification <- factor(combined_data$Modification, levels = c("m6A", "m5C", "Ψ"))
+
+w118_data <- combined_data %>% dplyr::filter(grepl("^W1118", Sample))
+fr113_data <- combined_data %>% dplyr::filter(grepl("^FR113N", Sample))
+Mettl3_KO_data <- combined_data %>% dplyr::filter(grepl("^Mettl3-KO", Sample))
+
+psi_data <- combined_data %>% dplyr::filter(Modification == "m6A")
+
+
+mod.dis.score <- ggplot(psi_data, aes(x = percent_modified, y = score, color = Sample)) +
+  geom_point(alpha = 0.6, size = 1.1) +
+  geom_smooth(method = "loess", se = FALSE, color = "black", linewidth = 0.8) +
+  facet_wrap(~Sample, scales = "free") +
+  theme_bw(base_size = 14) +
+  labs(title = "m6A: Percent Modified vs. Read Coverage (Score)",
+    x = "Percent Modified",
+    y = "Read Coverage (Score)") +
+  theme(strip.text = element_text(face = "bold", size = 13), legend.position = "none",
+    panel.grid.major = element_line(color = "gray90")) + theme_classic()
+```
+
+You're keeping m6A sites with:
+
+confident modification calls (score >= 10)
+
+non-zero modification (percent_modified > 0)
+
+capped stoichiometry to avoid constitutive or potentially noisy high sites (<= 70%)
+
+```{r}
+m6a.psi_data <- combined_data %>% dplyr::filter(Modification == "m6A")
+
+
+m6a.fig <- ggplot(m6a.psi_data, aes(x = percent_modified, y = score, color = Sample)) +
+  geom_point(alpha = 0.6, size = 1.1) +
+ geom_smooth(method = "loess", se = FALSE, color = "black", linewidth = 0.8) +
+  facet_wrap(~Sample, scales = "free") +
+  theme_bw(base_size = 14) +
+  labs(title = "m6A: Percent Modified vs. Read Coverage (Score)",
+    x = "Percent Modified",
+    y = "Read Coverage (Score)") +
+  theme(strip.text = element_text(face = "bold", size = 13), legend.position = "none",
+    panel.grid.major = element_line(color = "gray90")) + theme_classic()
+```
+
+
+
+```{r}
+m5C.data <- combined_data %>% dplyr::filter(Modification == "m5C")
+
+
+m5C.fig <- ggplot(m5C.data, aes(x = percent_modified, y = score, color = Sample)) +
+  geom_point(alpha = 0.6, size = 1.1) +
+  geom_smooth(method = "loess", se = FALSE, color = "black", linewidth = 0.8) +
+  facet_wrap(~Sample, scales = "free") +
+  theme_bw(base_size = 14) +
+  labs(title = "m5C: Percent Modified vs. Read Coverage (Score)",
+    x = "Percent Modified",
+    y = "Read Coverage (Score)") +
+  theme(strip.text = element_text(face = "bold", size = 13), legend.position = "none",
+    panel.grid.major = element_line(color = "gray90")) + theme_classic()
+```
+
+
+```{r}
+psi.data <- combined_data %>% dplyr::filter(Modification == "Ψ")
+
+
+psi.fig <- ggplot(psi.data, aes(x = percent_modified, y = score, color = Sample)) +
+  geom_point(alpha = 0.6, size = 1.1) +
+  geom_smooth(method = "loess", se = FALSE, color = "black", linewidth = 0.8) +
+  facet_wrap(~Sample, scales = "free") +
+  theme_bw(base_size = 14) +
+  labs(title = "Ψ: Percent Modified vs. Read Coverage (Score)",
+    x = "Percent Modified",
+    y = "Read Coverage (Score)") +
+  theme(strip.text = element_text(face = "bold", size = 13), legend.position = "none",
+    panel.grid.major = element_line(color = "gray90")) + theme_classic()
+```
+
+
+```{r}
+library(ggvenn)
+w1118_rep1_a_gene = unique(W1118_r1_a_mRNA$Gene_ID)
+w1118_rep1_m_gene = unique(W1118_r1_m_mRNA$Gene_ID)
+w1118_rep1_pseu_gene = unique(W1118_r1_pseu_mRNA$Gene_ID)
+
+w1118_rep2_a_gene = unique(W1118_r2_a_mRNA$Gene_ID)
+w1118_rep2_m_gene = unique(W1118_r2_m_mRNA$Gene_ID)
+w1118_rep2_pseu_gene = unique(W1118_r2_pseu_mRNA$Gene_ID)
+
+w1118_rep3_a_gene = unique(W1118_r3_a_mRNA$Gene_ID)
+w1118_rep3_m_gene = unique(W1118_r3_m_mRNA$Gene_ID)
+w1118_rep3_pseu_gene = unique(W1118_r3_pseu_mRNA$Gene_ID)
+
+
+fr113_rep1_a_genes = unique(FR1113N_r1_a_mRNA$Gene_ID)
+fr113_rep1_m_genes = unique(FR1113N_r1_m_mRNA$Gene_ID)
+fr113_rep1_pseu_genes = unique(FR1113N_r1_pseu_mRNA$Gene_ID)
+
+fr113_rep2_a_genes = unique(FR1113N_r2_a_mRNA$Gene_ID)
+fr113_rep2_m_genes = unique(FR1113N_r2_m_mRNA$Gene_ID)
+fr113_rep2_pseu_genes = unique(FR1113N_r2_pseu_mRNA$Gene_ID)
+
+fr113_rep3_a_genes = unique(FR1113N_r3_a_mRNA$Gene_ID)
+fr113_rep3_m_genes = unique(FR1113N_r3_m_mRNA$Gene_ID)
+fr113_rep3_pseu_genes = unique(FR1113N_r3_pseu_mRNA$Gene_ID)
+
+
+
+Mettl3_KO_rep1_a_genes = unique(Mettl3_r1_a_mRNA$Gene_ID)
+Mettl3_KO_rep1_m_genes = unique(Mettl3_r1_m_mRNA$Gene_ID)
+Mettl3_KO_rep1_pseu_genes = unique(Mettl3_r1_pseu_mRNA$Gene_ID)
+
+Mettl3_KO_rep2_a_genes = unique(Mettl3_r2_a_mRNA$Gene_ID)
+Mettl3_KO_rep2_m_genes = unique(Mettl3_r2_m_mRNA$Gene_ID)
+Mettl3_KO_rep2_pseu_genes = unique(Mettl3_r2_pseu_mRNA$Gene_ID)
+
+```
+
+
+```{r}
+library(dplyr)
+library(ggvenn)
+library(patchwork)
+library(ggplot2)
+
+
+# W1118
+W118_a_genes <- Reduce(union, list(w1118_rep1_a_gene, w1118_rep2_a_gene, w1118_rep3_a_gene))
+W118_m_genes <- Reduce(union, list(w1118_rep1_m_gene, w1118_rep2_m_gene, w1118_rep3_m_gene))
+W118_pseu_genes <- Reduce(union, list(w1118_rep1_pseu_gene, w1118_rep2_pseu_gene, w1118_rep3_pseu_gene))
+
+# FR113N
+FR113N_a_genes <- Reduce(union, list(fr113_rep1_a_genes, fr113_rep2_a_genes, fr113_rep3_a_genes))
+FR113N_m_genes <- Reduce(union, list(fr113_rep1_m_genes, fr113_rep2_m_genes, fr113_rep3_m_genes))
+FR113N_pseu_genes <- Reduce(union, list(fr113_rep1_pseu_genes, fr113_rep2_pseu_genes, fr113_rep3_pseu_genes))
+
+# Mettl3 KO
+Mettl3_a_genes <- Reduce(union, list(Mettl3_KO_rep1_a_genes, Mettl3_KO_rep2_a_genes))
+Mettl3_m_genes <- Reduce(union, list(Mettl3_KO_rep1_m_genes, Mettl3_KO_rep2_m_genes))
+Mettl3_pseu_genes <- Reduce(union, list(Mettl3_KO_rep1_pseu_genes, Mettl3_KO_rep2_pseu_genes))
+
+# ---- 2) Helper to produce ggvenn plot with consistent styling ----
+venn_theme <- function(title){
+  function(plot) {
+    plot + ggtitle(title) + theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"), legend.position = "none")
+  }}
+
+
+cols <- c("#1b9e77", "#d95f02", "#7570b3") # w1118, FR113N, Mettl3_KO
+
+# Build lists for ggvenn (names are genotype labels shown on plot)
+sets_a <- list(w1118 = W118_a_genes, FR113N = FR113N_a_genes, Mettl3_KO = Mettl3_a_genes)
+sets_m <- list(w1118 = W118_m_genes, FR113N = FR113N_m_genes, Mettl3_KO = Mettl3_m_genes)
+sets_p <- list(w1118 = W118_pseu_genes, FR113N = FR113N_pseu_genes, Mettl3_KO = Mettl3_pseu_genes)
+
+# Make plots
+p_a <- ggvenn(sets_a, c("w1118","FR113N","Mettl3_KO"), auto_scale = F, show_percentage = F, fill_color = cols, stroke_size = 0.5, set_name_size = 4, text_size = 4) %>% venn_theme("m6A")()
+p_m <- ggvenn(sets_m, c("w1118","FR113N","Mettl3_KO"), auto_scale = F, show_percentage = F, fill_color = cols, stroke_size = 0.5, set_name_size = 4, text_size = 4) %>% venn_theme("m5C")()
+p_p <- ggvenn(sets_p, c("w1118","FR113N","Mettl3_KO"), auto_scale = F, show_percentage = F, fill_color = cols, stroke_size = 0.5, set_name_size = 4, text_size = 4) %>% venn_theme("Pseudouridine (Ψ)")()
+
+# Arrange them horizontally (or use ncol = 1 for stacked)
+final_plot <- (p_a | p_m | p_p) + plot_annotation(title = "", subtitle = "")
+
+# Display
+print(final_plot)
+
+make_counts <- function(x, y, z){
+  # x,y,z are character vectors of gene IDs for the three genotypes
+  only_x <- setdiff(x, union(y,z))
+  only_y <- setdiff(y, union(x,z))
+  only_z <- setdiff(z, union(x,y))
+  xy_only <- setdiff(intersect(x,y), z)
+  xz_only <- setdiff(intersect(x,z), y)
+  yz_only <- setdiff(intersect(y,z), x)
+  xyz <- Reduce(intersect, list(x,y,z))
+  tibble(
+    only_x = length(only_x),
+    only_y = length(only_y),
+    only_z = length(only_z),
+    xy_only = length(xy_only),
+    xz_only = length(xz_only),
+    yz_only = length(yz_only),
+    xyz = length(xyz),
+    total_unique_genes = length(union(x, union(y,z))))
+}
+
+counts_a <- make_counts(W118_a_genes, FR113N_a_genes, Mettl3_a_genes) %>% mutate(mod = "m6A")
+counts_m <- make_counts(W118_m_genes, FR113N_m_genes, Mettl3_m_genes) %>% mutate(mod = "m5C")
+counts_p <- make_counts(W118_pseu_genes, FR113N_pseu_genes, Mettl3_pseu_genes) %>% mutate(mod = "Psi")
+
+summary_counts <- bind_rows(counts_a, counts_m, counts_p) %>%
+  dplyr::select(mod, everything())
+
+# Print the summary table
+print(summary_counts)
+
+# (Optional) write summary to disk
+# write.csv(summary_counts, "modification_genes_venn_summary.csv", row.names = FALSE)
+
+# ---- 4) Optional: Save figure to file ----
+# ggsave("mods_genes_venn.png", final_plot, width = 14, height = 5, dpi = 300)
+
+```
+
+
+
+```{r}
+# List all filtered data frames and assign names
+filtered_list <- list(
+  W118_rep1_m6A = W1118_r1_a_mRNA,
+  W118_rep1_m5C = W1118_r1_m_mRNA,
+  W118_rep1_pseu = W1118_r1_pseu_mRNA,
+  W118_rep2_m6A = W1118_r2_a_mRNA,
+  W118_rep2_m5C = W1118_r2_m_mRNA,
+  W118_rep2_pseu = W1118_r2_pseu_mRNA,
+  W118_rep3_m6A = W1118_r3_a_mRNA,
+  W118_rep3_m5C = W1118_r3_m_mRNA,
+  W118_rep3_pseu = W1118_r3_pseu_mRNA,
+  FR113_rep1_m6A = FR1113N_r1_a_mRNA,
+  FR113_rep1_m5C = FR1113N_r1_m_mRNA,
+  FR113_rep1_pseu = FR1113N_r1_pseu_mRNA,
+  FR113_rep2_m6A = FR1113N_r2_a_mRNA,
+  FR113_rep2_m5C = FR1113N_r2_m_mRNA,
+  FR113_rep2_pseu = FR1113N_r2_pseu_mRNA,
+  FR113_rep3_m6A = FR1113N_r3_a_mRNA,
+  FR113_rep3_m5C = FR1113N_r3_m_mRNA,
+  FR113_rep3_pseu = FR1113N_r3_pseu_mRNA,
+  Mettl3_rep1_m6A = Mettl3_r1_a_mRNA,
+  Mettl3_rep1_m5C = Mettl3_r1_m_mRNA,
+  Mettl3_rep1_pseu = Mettl3_r1_pseu_mRNA,
+  Mettl3_rep2_m6A = Mettl3_r2_a_mRNA,
+  Mettl3_rep2_m5C = Mettl3_r2_m_mRNA,
+  Mettl3_rep2_pseu = Mettl3_r2_pseu_mRNA)
+
+# Extract unique gene IDs for each sample
+gene_lists <- lapply(filtered_list, function(df) unique(df$Gene_ID))
+
+# Create a binary matrix: rows = unique genes, columns = samples
+all_genes <- unique(unlist(gene_lists))
+presence_matrix <- sapply(gene_lists, function(glist) all_genes %in% glist)
+rownames(presence_matrix) <- all_genes
+
+# convert to numeric (TRUE/FALSE → 1/0)
+presence_matrix <- apply(presence_matrix, 2, as.numeric)
+
+library(pheatmap)
+library(RColorBrewer)
+
+# Custom color palette: white for 0 (absent), blue for 1 (present)
+heat_colors <- c("beige", "#1f78b4")
+
+
+sample_info <- data.frame(
+  Condition = sub(".*_(m6A|m5C|pseu)$", "\\1", colnames(presence_matrix)),
+  Replicate = sub("_(r\\d|rep\\d).*", "\\1", colnames(presence_matrix)))
+rownames(sample_info) <- colnames(presence_matrix)
+
+
+heatmapA <- pheatmap(presence_matrix, color = heat_colors, cluster_rows = FALSE, cluster_cols = TRUE, treeheight_row = 0, treeheight_col = 50, scale = "none", show_rownames = TRUE, show_colnames = TRUE, annotation_col = sample_info,  main = "Shared & exclusive genes across all datasets", legend_breaks = c(0, 1), legend_labels = c("Exclusive", "Shared"), border_color = "grey80")
+
+
+heatmapA
+```
+
+
+```{r}
+# Packages
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+library(ggrepel)
+library(tibble)
+
+## Helper: resolve object names robustly (handles FR113N vs FR1113N) ----------
+resolve_df <- function(candidates) {
+  for (nm in candidates) {
+    if (exists(nm, inherits = TRUE)) return(get(nm, inherits = TRUE))
+  }
+  stop("None of these objects exist: ", paste(candidates, collapse = ", "))
+}
+
+sample_list <- list(
+  # W1118
+  w1118_rep1_m6A = resolve_df(c("W1118_r1_a_mRNA")),
+  w1118_rep1_m5C = resolve_df(c("W1118_r1_m_mRNA")),
+  w1118_rep1_pseu = resolve_df(c("W1118_r1_pseu_mRNA")),
+  w1118_rep2_m6A = resolve_df(c("W1118_r2_a_mRNA")),
+  w1118_rep2_m5C = resolve_df(c("W1118_r2_m_mRNA")),
+  w1118_rep2_pseu = resolve_df(c("W1118_r2_pseu_mRNA")),
+  w1118_rep3_m6A = resolve_df(c("W1118_r3_a_mRNA")),
+  w1118_rep3_m5C = resolve_df(c("W1118_r3_m_mRNA")),
+  w1118_rep3_pseu = resolve_df(c("W1118_r3_pseu_mRNA")),
+
+  # FR113N  (also accept FR1113N_* if that's how objects are named)
+  FR113N_rep1_m6A = resolve_df(c("FR113N_r1_a_mRNA", "FR1113N_r1_a_mRNA")),
+  FR113N_rep1_m5C = resolve_df(c("FR113N_r1_m_mRNA", "FR1113N_r1_m_mRNA")),
+  FR113N_rep1_pseu = resolve_df(c("FR113N_r1_pseu_mRNA", "FR1113N_r1_pseu_mRNA")),
+  FR113N_rep2_m6A = resolve_df(c("FR113N_r2_a_mRNA", "FR1113N_r2_a_mRNA")),
+  FR113N_rep2_m5C = resolve_df(c("FR113N_r2_m_mRNA", "FR1113N_r2_m_mRNA")),
+  FR113N_rep2_pseu = resolve_df(c("FR113N_r2_pseu_mRNA", "FR1113N_r2_pseu_mRNA")),
+  FR113N_rep3_m6A = resolve_df(c("FR113N_r3_a_mRNA", "FR1113N_r3_a_mRNA")),
+  FR113N_rep3_m5C = resolve_df(c("FR113N_r3_m_mRNA", "FR1113N_r3_m_mRNA")),
+  FR113N_rep3_pseu = resolve_df(c("FR113N_r3_pseu_mRNA", "FR1113N_r3_pseu_mRNA")),
+
+  # Mettl3-KO  (objects commonly named Mettl3_*; keep that but label as Mettl3-KO)
+  `Mettl3-KO_rep1_m6A` = resolve_df(c("Mettl3_r1_a_mRNA")),
+  `Mettl3-KO_rep1_m5C` = resolve_df(c("Mettl3_r1_m_mRNA")),
+  `Mettl3-KO_rep1_pseu` = resolve_df(c("Mettl3_r1_pseu_mRNA")),
+  `Mettl3-KO_rep2_m6A` = resolve_df(c("Mettl3_r2_a_mRNA")),
+  `Mettl3-KO_rep2_m5C` = resolve_df(c("Mettl3_r2_m_mRNA")),
+  `Mettl3-KO_rep2_pseu` = resolve_df(c("Mettl3_r2_pseu_mRNA")))
+
+## 2) Build a site key and extract the score column ----------------------------
+# Assumes input dfs have columns: Gene_ID, percent_modified
+prep_one <- function(df, sample_name) {
+  df %>%
+    mutate(site = as.character(Gene_ID)) %>%
+    distinct(site, .keep_all = TRUE) %>%
+    dplyr::select(site, percent_modified) %>%
+    rename(!!sample_name := percent_modified)
+}
+
+# Intersection of sites across all samples (change to full_join for union)
+wide_scores <- imap(sample_list, prep_one) %>%
+  reduce(inner_join, by = "site")
+
+## 3) Matrix: rows = sites, cols = samples -------------------------------------
+mat_sites_x_samples <- wide_scores %>%
+  arrange(site) %>%
+  column_to_rownames("site") %>%
+  as.matrix()
+
+## 4) PCA on samples (transpose so samples are observations) -------------------
+pca <- prcomp(t(mat_sites_x_samples), center = TRUE, scale. = TRUE)
+var_expl <- (pca$sdev^2) / sum(pca$sdev^2)
+percentVar <- round(100 * var_expl, 1)
+pc1_lab <- paste0("PC1 (", percentVar[1], "%)")
+pc2_lab <- paste0("PC2 (", percentVar[2], "%)")
+
+## 5) Sample metadata parsed from names ----------------------------------------
+pca_data <- as.data.frame(pca$x) %>%
+  rownames_to_column("sample") %>%
+  separate(sample, into = c("Strain", "Rep", "Mod"), sep = "_", remove = FALSE, fill = "right") %>%
+  mutate(
+    Rep = factor(Rep),
+    Mod = factor(Mod, levels = c("m6A", "m5C", "pseu")),
+    condition = factor(Strain, levels = c("w1118", "FR113N", "Mettl3-KO")))
+
+custom_colors <- c("w1118" = "#1b9e77","FR113N" = "#d95f02", "Mettl3-KO" = "#7570b3")
+
+percent_mod <- ggplot(pca_data, aes(PC1, PC2, color = condition, fill = condition)) +
+  stat_ellipse(type = "euclid", alpha = 0.9, colour = "black") +
+  geom_point(size = 4, shape = 21, stroke = 0.6) +
+  labs(title = "PCA of samples (percent_modified)", x = paste0("PC1: ", percentVar[1], "% variance"), y = paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() +
+  scale_fill_manual(values = custom_colors, drop = FALSE) +
+  scale_color_manual(values = custom_colors, drop = FALSE) +
+  theme_classic(base_size = 12) +
+  theme(panel.border = element_rect(fill = NA, color = "grey70"), plot.title = element_text(hjust = 0.5, face = "bold")) + theme_classic() +
+  guides(color = guide_legend(title = "Condition"),
+         fill  = guide_legend(title = "Condition")) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x = element_text(hjust = 1),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+
+
+
+```
+
+
+```{r}
+
+filtered_dfs <- list(
+  W1118_r1_a_mRNA, W1118_r1_m_mRNA, W1118_r1_pseu_mRNA,
+  W1118_r2_a_mRNA, W1118_r2_m_mRNA, W1118_r2_pseu_mRNA,
+  W1118_r3_a_mRNA, W1118_r3_m_mRNA, W1118_r3_pseu_mRNA,
+  FR1113N_r1_a_mRNA, FR1113N_r1_m_mRNA, FR1113N_r1_pseu_mRNA,
+  FR1113N_r2_a_mRNA, FR1113N_r2_m_mRNA, FR1113N_r2_pseu_mRNA,
+  FR1113N_r3_a_mRNA, FR1113N_r3_m_mRNA, FR1113N_r3_pseu_mRNA,
+  Mettl3_r1_a_mRNA, Mettl3_r1_m_mRNA, Mettl3_r1_pseu_mRNA,
+  Mettl3_r2_a_mRNA, Mettl3_r2_m_mRNA, Mettl3_r2_pseu_mRNA)
+
+sample_ids <- c(
+  "W1118_Rep1_m6A", "W1118_Rep1_m5C", "W1118_Rep1_Pseu",
+  "W1118_Rep2_m6A", "W1118_Rep2_m5C", "W1118_Rep2_Pseu",
+  "W1118_Rep3_m6A", "W1118_Rep3_m5C", "W1118_Rep3_Pseu",
+  "FR113N_Rep1_m6A", "FR113N_Rep1_m5C", "FR113N_Rep1_Pseu",
+  "FR113N_Rep2_m6A", "FR113N_Rep2_m5C", "FR113N_Rep2_Pseu",
+  "FR113N_Rep3_m6A", "FR113N_Rep3_m5C", "FR113N_Rep3_Pseu",
+  "Mettl3-KO_Rep1_m6A", "Mettl3-KO_Rep1_m5C", "Mettl3-KO_Rep1_Pseu",
+  "Mettl3-KO_Rep2_m6A", "Mettl3-KO_Rep2_m5C", "Mettl3-KO_Rep2_Pseu")
+
+# %>%filter(Location != "" & Location != "null" & Location != "N/A" & Location != "intron")
+gene_counts_by_sample <- Map(function(df, name) {
+  df %>%
+    filter(Location != "" & Location != "null" & Location != "N/A" & Location != "intron") %>%
+    group_by(chrom) %>%
+    summarise(Gene_Count = n_distinct(Gene_ID), .groups = "drop") %>%
+    mutate(Sample = name)
+}, filtered_dfs, sample_ids) %>%
+  bind_rows()
+
+library(RColorBrewer)
+
+gene_counts_by_sample <- gene_counts_by_sample %>%
+  mutate(Group = ifelse(grepl("^W118", Sample), "W1118", "FR113N"),
+         Modification = case_when(
+           grepl("m6A", Sample) ~ "m6A",
+           grepl("m5C", Sample) ~ "m5C",
+           grepl("Pseu", Sample) ~ "Pseudouridine",
+           TRUE ~ "Other"))
+
+
+print(gene_counts_by_sample)
+
+
+gene_counts_by_sample <- gene_counts_by_sample %>%
+  mutate(Sample = factor(Sample, levels = unique(Sample)))
+
+chrom_order <- sort(unique(gene_counts_by_sample$chrom))
+gene_counts_by_sample$chrom <- factor(gene_counts_by_sample$chrom, levels = chrom_order)
+
+filtered_gene_counts <- Map(function(df, name) {
+  df %>%
+    filter(Location != "" & Location != "null" & Location != "N/A" & Location != "intron") %>%
+    group_by(chrom) %>%
+    summarise(Gene_Count = n_distinct(Gene_ID), .groups = "drop") %>%
+    mutate(Sample = name)
+}, filtered_dfs, sample_ids) %>%
+  bind_rows()
+
+
+sample_split <- split(filtered_gene_counts, filtered_gene_counts$Sample)
+
+# Function to create a labeled bar plot per replicate
+plot_sample_bars <- function(df, sample_name) {
+  ggplot(df, aes(x = chrom, y = Gene_Count, fill = chrom)) +
+    geom_bar(stat = "identity", color = "black", width = 0.8) +
+    geom_text(aes(label = Gene_Count), vjust = -0.3, size = 4.5) +
+    scale_fill_brewer(palette = "Set2") +
+    labs(title = paste("Gene Count per Chromosome:", sample_name),
+         x = "Chromosome", y = "# of unique Genes") +
+    theme_minimal(base_size = 14) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+      legend.position = "none") +
+    ylim(0, max(df$Gene_Count) * 1.15) + theme_classic()
+}
+
+# Generate and display the plots
+sample_plots <- lapply(names(sample_split), function(s) plot_sample_bars(sample_split[[s]], s))
+
+# Print each plot separately
+for (p in sample_plots) print(p)
+```
+
+
+```{r}
+subset_samples <- gene_counts_by_sample %>%
+  filter(grepl("^FR113", Sample), Modification %in% c("m6A", "m5C", "Pseudouridine"))
+chrom_order <- sort(unique(subset_samples$chrom))
+subset_samples$chrom <- factor(subset_samples$chrom, levels = chrom_order)
+
+mod_list <- split(subset_samples, subset_samples$Modification)
+
+plot_modification_bars <- function(df, mod_name) {
+  ggplot(df, aes(x = chrom, y = Gene_Count, fill = Sample)) +
+    geom_bar(stat = "identity", position = "stack", color = "black") +
+    geom_text(aes(label = Gene_Count), position = position_stack(vjust = 0.5), size = 4.5, color = "black") +
+    scale_fill_brewer(palette = "Set2") +
+    labs(title = paste("number of genes per chromosome -", mod_name), x = "chromosome", y = "# of unique genes", fill = "Sample") + theme_minimal(base_size = 14) + theme(axis.text.x = element_text(angle = 45, hjust = 1), plot.title = element_text(size = 16, face = "bold", hjust = 0.5)) + theme_classic()
+}
+
+
+mod_plots <- lapply(names(mod_list), function(mod) {
+  plot_modification_bars(mod_list[[mod]], mod)
+})
+
+for (p in mod_plots) print(p)
+
+FR113.combined_mod_plots <- wrap_plots(mod_plots, ncol = 2) +
+  plot_annotation(title = "Gene counts per chromosome by modification", theme = theme(plot.title = element_text(size = 16, face = "bold")))
+```
+
+
+
+```{r}
+subset_samples <- gene_counts_by_sample %>%
+  dplyr::filter(grepl("^W1118", Sample), Modification %in% c("m6A", "m5C", "Pseudouridine"))
+
+chrom_order <- sort(unique(subset_samples$chrom))
+subset_samples$chrom <- factor(subset_samples$chrom, levels = chrom_order)
+
+mod_list <- split(subset_samples, subset_samples$Modification)
+
+plot_modification_bars <- function(df, mod_name) {
+  ggplot(df, aes(x = chrom, y = Gene_Count, fill = Sample)) +
+    geom_bar(stat = "identity", position = "stack", color = "black") +
+    geom_text(aes(label = Gene_Count), position = position_stack(vjust = 0.5), size = 4.5, color = "black") +
+    scale_fill_brewer(palette = "Set2") +
+    labs(title = paste("number of genes per chromosome -", mod_name), x = "chromosome", y = "# of unique genes", fill = "Sample") + theme_minimal(base_size = 14) + theme(axis.text.x = element_text(angle = 45, hjust = 1), plot.title = element_text(size = 16, face = "bold", hjust = 0.5)) + theme_classic()
+}
+
+
+mod_plots <- lapply(names(mod_list), function(mod) {
+  plot_modification_bars(mod_list[[mod]], mod)
+})
+
+for (p in mod_plots) print(p)
+
+w118.combined_mod_plots <- wrap_plots(mod_plots, ncol = 2) +
+  plot_annotation(title = "Gene counts per chromosome by modification",
+                  theme = theme(plot.title = element_text(size = 16, face = "bold")))
+```
+
+```{r}
+subset_samples <- gene_counts_by_sample %>%
+  filter(grepl("^Mettl3-KO", Sample), Modification %in% c("m6A", "m5C", "Pseudouridine"))
+
+chrom_order <- sort(unique(subset_samples$chrom))
+subset_samples$chrom <- factor(subset_samples$chrom, levels = chrom_order)
+
+mod_list <- split(subset_samples, subset_samples$Modification)
+
+plot_modification_bars <- function(df, mod_name) {
+  ggplot(df, aes(x = chrom, y = Gene_Count, fill = Sample)) +
+    geom_bar(stat = "identity", position = "stack", color = "black") +
+    geom_text(aes(label = Gene_Count), position = position_stack(vjust = 0.5), size = 4.5, color = "black") +
+    scale_fill_brewer(palette = "Set2") +
+    labs(title = paste("number of genes per chromosome -", mod_name), x = "chromosome", y = "# of unique genes", fill = "Sample") + theme_minimal(base_size = 14) + theme(axis.text.x = element_text(angle = 45, hjust = 1), plot.title = element_text(size = 16, face = "bold", hjust = 0.5)) + theme_classic()
+}
+
+
+mod_plots <- lapply(names(mod_list), function(mod) {
+  plot_modification_bars(mod_list[[mod]], mod)
+})
+
+for (p in mod_plots) print(p)
+
+mettl3.combined_mod_plots <- wrap_plots(mod_plots, ncol = 2) +
+  plot_annotation(title = "Gene counts per chromosome by modification",
+                  theme = theme(plot.title = element_text(size = 16, face = "bold")))
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+
+# 1) Filter
+subset_samples <- gene_counts_by_sample %>%
+  dplyr::filter(grepl("^(FR113|W1118|Mettl3-KO)", Sample),
+         Modification %in% c("m6A", "m5C", "Pseudouridine"))
+
+# 2) Collapse replicate/sample-name variants to groups
+subset_samples <- subset_samples %>%
+  mutate(
+    Group = case_when(
+      grepl("^W1118", Sample) ~ "w1118",
+      grepl("^FR113", Sample) ~ "FR113N",
+      grepl("^Mettl3-KO", Sample) ~ "Mettl3-KO",
+      TRUE ~ "Other"))
+
+# 3) Order chromosomes
+chrom_order <- sort(unique(subset_samples$chrom))
+subset_samples$chrom <- factor(subset_samples$chrom, levels = chrom_order)
+
+# 4) Colors ONLY for present groups
+group_colors <- c("w1118" = "#1b9e77","FR113N" = "#d95f02", "Mettl3-KO" = "#7570b3")
+group_colors <- group_colors[intersect(names(group_colors), unique(subset_samples$Group))]
+
+# 5) Split by modification
+mod_list <- split(subset_samples, subset_samples$Modification)
+
+# 6) Plot function
+plot_modification <- function(df, mod_name) {
+  ggplot(df, aes(x = chrom, y = Gene_Count, fill = Group)) +
+    geom_bar(stat = "identity", position = "stack", color = "black", linewidth = 0.2) +
+    geom_text(aes(label = ifelse(Gene_Count > 0, Gene_Count, "")),
+              position = position_stack(vjust = 0.5),
+              size = 3.3, color = "black", check_overlap = TRUE) +
+    scale_fill_manual(values = group_colors) +
+    labs(title = paste("", mod_name),
+         x = "Chromosome", y = "# of unique genes", fill = "Group") +
+    theme_classic(base_size = 14) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          plot.title = element_text(size = 16, face = "bold", hjust = 0.5))
+}
+
+# 7) Build & combine
+mod_plots <- lapply(names(mod_list), function(m) plot_modification(mod_list[[m]], m))
+for (p in mod_plots) print(p)
+
+all.combined_mod_plots <- wrap_plots(mod_plots, ncol = 3) +
+  plot_annotation(title = "Number of genes modified per chromosome",
+                  theme = theme(plot.title = element_text(size = 16, face = "bold")))
+
+all.combined_mod_plots
+
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(patchwork)
+
+clean_filter <- function(df) {
+  df %>% dplyr::filter(!Location %in% c("", "null", "N/A", "intron"))
+}
+
+peak_dfs <- list(
+  W1118_r1_a_mRNA, W1118_r1_m_mRNA, W1118_r1_pseu_mRNA,
+  W1118_r2_a_mRNA, W1118_r2_m_mRNA, W1118_r2_pseu_mRNA,
+  W1118_r3_a_mRNA, W1118_r3_m_mRNA, W1118_r3_pseu_mRNA,
+  FR1113N_r1_a_mRNA, FR1113N_r1_m_mRNA, FR1113N_r1_pseu_mRNA,
+  FR1113N_r2_a_mRNA, FR1113N_r2_m_mRNA, FR1113N_r2_pseu_mRNA,
+  FR1113N_r3_a_mRNA, FR1113N_r3_m_mRNA, FR1113N_r3_pseu_mRNA,
+  Mettl3_r1_a_mRNA, Mettl3_r1_m_mRNA, Mettl3_r1_pseu_mRNA,
+  Mettl3_r2_a_mRNA, Mettl3_r2_m_mRNA, Mettl3_r2_pseu_mRNA)
+
+sample_names <- c(
+  "W1118_Rep1_m6A", "W1118_Rep1_m5C", "W1118_Rep1_Pseu",
+  "W1118_Rep2_m6A", "W1118_Rep2_m5C", "W1118_Rep2_Pseu",
+  "W1118_Rep3_m6A", "W1118_Rep3_m5C", "W1118_Rep3_Pseu",
+  "FR113N_Rep1_m6A", "FR113N_Rep1_m5C", "FR113N_Rep1_Pseu",
+  "FR113N_Rep2_m6A", "FR113N_Rep2_m5C", "FR113N_Rep2_Pseu",
+  "FR113N_Rep3_m6A", "FR113N_Rep3_m5C", "FR113N_Rep3_Pseu",
+  "Mettl3-KO_Rep1_m6A", "Mettl3-KO_Rep1_m5C", "Mettl3-KO_Rep1_Pseu",
+  "Mettl3-KO_Rep2_m6A", "Mettl3-KO_Rep2_m5C", "Mettl3-KO_Rep2_Pseu")
+
+mod_types <- ifelse(grepl("pseu", tolower(sample_names)), "Ψ",
+  ifelse(grepl("m5c", tolower(sample_names)), "m5C", "m6A"))
+
+annotated_peaks <- Map(function(df, sample, mod) {
+  if ("mod" %in% names(df)) df <- df[, !(names(df) %in% "mod")]
+
+  clean_filter(df) %>%
+    mutate(Sample = sample,
+      Group = case_when(grepl("^W1118", sample) ~ "W1118", grepl("^FR113N", sample) ~ "FR113N", grepl("^Mettl3-KO", sample) ~ "Mettl3-KO", TRUE ~ "Other"),
+      Modification = mod, Replicate = case_when(grepl("Rep1", sample) ~ "Rep1", grepl("Rep2", sample) ~ "Rep2", grepl("Rep3", sample) ~ "Rep3", TRUE ~ "Other"))
+}, peak_dfs, sample_names, mod_types) %>%
+  bind_rows()
+
+annotated_peaks$chrom <- factor(annotated_peaks$chrom, levels = sort(unique(annotated_peaks$chrom)))
+
+plot_data <- annotated_peaks %>%
+  group_by(Group, Sample, Modification, Replicate, chrom) %>%
+  summarise(Peak_Count = n(), Gene_Count = n_distinct(Gene_ID),
+    .groups = "drop")
+
+mod_split_data <- split(plot_data, plot_data$Modification)
+
+group_colors <- c("W1118" = "#1b9e77", "FR113N" = "#d95f02", "Mettl3-KO" = "#7570b3")
+
+plot_lollipop <- function(df, mod_type) {
+  pd <- position_dodge(width = 0.7)
+
+  ggplot(df, aes(x = chrom, y = Peak_Count)) +
+    geom_segment(aes(xend = chrom, yend = 0), color = "black", position = pd) +
+    geom_point(aes(color = Group, fill = Group, shape = Replicate), size = 3.8, stroke = 0.6, position = pd) +
+    geom_text(aes(label = paste0(Peak_Count, " (", Gene_Count, " genes)")), vjust = -1.1, position = pd, size = 3.2) +
+    labs(title = paste("Number of modified sites and gene distribution in", mod_type), x = "Chromosome", y = "Modified sites") +
+    scale_shape_manual(values = c("Rep1" = 21, "Rep2" = 22, "Rep3" = 23, "Other" = 24)) +
+    scale_color_manual(values = group_colors, guide = guide_legend(title = "Group")) +
+    scale_fill_manual(values = group_colors, guide = "none") +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+    theme_classic(base_size = 14) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"), axis.title = element_text(face = "bold"))+
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x = element_text(hjust = 1),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+}
+
+
+lollipop_plots <- lapply(names(mod_split_data), function(mod) {
+  plot_lollipop(mod_split_data[[mod]], mod)
+})
+
+
+for (p in lollipop_plots) print(p)
+
+
+all.mod_plots <- wrap_plots(lollipop_plots, ncol = 3) +
+  plot_annotation(title = "Gene counts per chromosome by modification", theme = theme_classic(base_size = 16) + theme(plot.title = element_text(face = "bold", hjust = 0.5)))
+
+print(all.mod_plots)
+
+```
+
+
+
+finds the most frequent genes in 3'UTR, 5'UTR, and CDS for each modification (m6A, m5C, Ψ). It assumes you already created annotated_peaks as in your earlier script.
+
+It:
+
+normalizes the Location labels into three regions,
+
+counts peaks per Modification × Region × Gene_ID across all samples/replicates,
+
+returns the top K genes per region for each modification,
+
+(optional) also ranks genes by replicate presence (consistency).
+```{r}
+library(dplyr)
+library(stringr)
+library(forcats)
+library(ggplot2)
+library(patchwork)
+
+normalize_region <- function(x) {
+  y <- tolower(trimws(x))
+  y <- gsub("[ _-]", "", y)
+  dplyr::case_when(
+    str_detect(y, "^(3'utr|utr3'|3utr|utr3|threeprimeutr|threeprime)$") ~ "3'UTR",
+    str_detect(y, "^(5'utr|utr5'|5utr|utr5|fiveprimeutr|fiveprime)$") ~ "5'UTR",
+    str_detect(y, "^(cds|codingsequence|cdsregion)$") ~ "CDS",
+    TRUE ~ NA_character_)
+}
+
+if (!"Dataset" %in% names(annotated_peaks)) {
+  annotated_peaks <- annotated_peaks %>%
+    mutate(Dataset = case_when(
+      grepl("^W1118", Sample) ~ "W1118",
+      grepl("^FR113N", Sample) ~ "FR113N",
+      grepl("^Mettl3-KO", Sample) ~ "Mettl3-KO",
+      TRUE ~ "Other"))
+}
+
+ap <- annotated_peaks %>%
+  mutate(Region = normalize_region(Location)) %>%
+  dplyr::filter(!is.na(Region), !is.na(Gene_ID), Gene_ID != "") %>%
+  mutate(Region = factor(Region, levels = c("5'UTR", "CDS", "3'UTR")))
+
+gene_counts <- ap %>%
+  group_by(Dataset, Modification, Region, Gene_ID) %>%
+  summarise(Peak_Count = n(), .groups = "drop")
+
+K <- 10
+top_genes_by_ds_mod_region <- gene_counts %>%
+  group_by(Dataset, Modification, Region) %>%
+  arrange(desc(Peak_Count), Gene_ID) %>%
+  mutate(Rank = row_number()) %>%
+  dplyr::filter(Rank <= K) %>%
+  ungroup()
+
+replicate_consistent_top <- ap %>%
+  group_by(Dataset, Modification, Region, Gene_ID, Replicate) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(Dataset, Modification, Region, Gene_ID) %>%
+  summarise(Replicate_Presence = n_distinct(Replicate),
+            Peak_Count = sum(n), .groups = "drop") %>%
+  group_by(Dataset, Modification, Region) %>%
+  arrange(desc(Replicate_Presence), desc(Peak_Count), Gene_ID) %>%
+  mutate(Rank = row_number()) %>%
+  dplyr::filter(Rank <= K) %>%
+  ungroup()
+
+region_cols <- c("5'UTR" = "#268BD2", "CDS" = "#DC322F", "3'UTR" = "#2AA198")
+
+plot_one_dataset <- function(df, dataset_name) {
+  ds_df <- df %>% filter(Dataset == dataset_name)
+
+  if (nrow(ds_df) == 0) {
+    return(ggplot() +
+        annotate("text", x = 0, y = 0, label = paste("No data for", dataset_name)) +
+        theme_void())
+  }
+
+  ggplot(
+    ds_df,
+    aes(x = fct_reorder(Gene_ID, Peak_Count), y = Peak_Count, fill = Region)) +
+    geom_col(color = "black", linewidth = 0.2, width = 0.8) +
+    geom_text(aes(label = Peak_Count), hjust = -0.15, size = 5) +
+    coord_flip(clip = "off") +
+    facet_grid(Region ~ Modification, scales = "free_y") +
+    scale_fill_manual(values = region_cols) +
+    scale_y_continuous(expand = expansion(mult = c(0.02, 0.12))) +
+    labs(
+      title = paste0("Top ", K, " genes per region - ", dataset_name),
+      x = "Gene", y = "Number of modified sites", fill = "Region") +
+    theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 12),
+        legend.position = "right", size = 12,
+        legend.text=element_text(size=12, family = "Times New Roman"), 
+        axis.text.x = element_text(hjust = 1, vjust = 1))
+}
+
+datasets <- unique(top_genes_by_ds_mod_region$Dataset)
+plot_list <- setNames(lapply(datasets, function(ds)
+  plot_one_dataset(top_genes_by_ds_mod_region, ds)), datasets)
+
+combined_fig <- wrap_plots(plot_list, ncol = 3) +
+  plot_annotation(
+    title = "Top genes per transcript region by dataset and modification",
+    caption = paste0("Top ", K, " genes within each Region × Modification per dataset."),
+    theme = theme_classic(base_size = 12) +
+      theme(plot.title = element_text(face = "bold", hjust = 0.5)))
+
+print(combined_fig)
+
+# --- 8) (Optional) Save high-res output ---
+# ggsave("TopGenes_byRegion_perDataset.pdf", combined_fig, width = 14, height = 10, units = "in")
+# ggsave("TopGenes_byRegion_perDataset.png", combined_fig, width = 14, height = 10, units = "in", dpi = 300)
+
+
+```
+
+
+#A) Within each Modification: Regions differ? (paired) 
+#B) Within each Region: Do modifications differ? (paired)
+```{r}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(forcats)
+library(broom)
+
+# ---------- Helpers ----------
+normalize_region <- function(x) {
+  y <- tolower(trimws(x)); y <- gsub("[ _-]", "", y)
+  dplyr::case_when(
+    str_detect(y, "^(5'utr|utr5'|5utr|utr5|fiveprimeutr|fiveprime)$") ~ "5'UTR",
+    str_detect(y, "^(cds|codingsequence|cdsregion)$") ~ "CDS",
+    str_detect(y, "^(3'utr|utr3'|3utr|utr3|threeprimeutr|threeprime)$") ~ "3'UTR",
+    TRUE ~ NA_character_)
+}
+region_levels <- c("5'UTR","CDS","3'UTR")
+
+# ---------- Percent of sites per sample × modification × region ----------
+ap <- annotated_peaks %>%
+  mutate(Region = normalize_region(Location)) %>%
+  filter(!is.na(Region), !is.na(Gene_ID), Gene_ID != "") %>%
+  mutate(Region = factor(Region, levels = region_levels))
+
+region_counts <- ap %>%
+  group_by(Sample, Modification, Group, Region) %>%
+  summarise(n_sites = dplyr::n(), .groups = "drop")
+
+totals <- region_counts %>%
+  group_by(Sample, Modification, Group) %>%
+  summarise(total_sites = sum(n_sites), .groups = "drop")
+
+region_pct <- region_counts %>%
+  left_join(totals, by = c("Sample","Modification","Group")) %>%
+  mutate(percent = ifelse(total_sites > 0, n_sites/total_sites, NA_real_)) %>%
+  # base sample id to match across modifications (e.g., "W118_Rep1")
+  mutate(BaseID = gsub("_(m6a|m5c|pseu).*", "", Sample, ignore.case = TRUE))
+
+# =========================================================
+# A) Within each Modification: Regions differ? (paired) 
+#    Friedman + post-hoc paired Wilcoxon with Holm
+# =========================================================
+mods <- unique(region_pct$Modification)
+
+friedman_within_mod <- lapply(mods, function(mod) {
+  wide <- region_pct %>%
+    filter(Modification == mod) %>%
+    dplyr::select(Sample, Region, percent) %>%
+    tidyr::pivot_wider(names_from = Region, values_from = percent) %>%
+    tidyr::drop_na(all_of(region_levels))
+  n <- nrow(wide); k <- length(region_levels)
+  if (n >= 2) {
+    M <- as.matrix(wide[, region_levels])
+    ft <- friedman.test(M)
+    W  <- unname(ft$statistic) / (n * (k - 1))  # Kendall's W effect size
+    tibble(Modification = mod,
+           n = n, df = unname(ft$parameter),
+           statistic = unname(ft$statistic),
+           p.value = ft$p.value,
+           Kendall_W = W)
+  } else {
+    tibble(Modification = mod, n = n, df = NA_integer_,
+           statistic = NA_real_, p.value = NA_real_, Kendall_W = NA_real_)
+  }
+}) %>% bind_rows() %>%
+  mutate(p.adj.BH = p.adjust(p.value, method = "BH"))
+
+# Post-hoc per modification
+pairs <- list(c("5'UTR","CDS"), c("5'UTR","3'UTR"), c("CDS","3'UTR"))
+posthoc_within_mod <- lapply(mods, function(mod) {
+  wide <- region_pct %>%
+    filter(Modification == mod) %>%
+    dplyr::select(Sample, Region, percent) %>%
+    tidyr::pivot_wider(names_from = Region, values_from = percent) %>%
+    tidyr::drop_na(all_of(region_levels))
+  if (nrow(wide) < 2) return(tibble())
+  bind_rows(lapply(pairs, function(pr) {
+    x <- wide[[pr[1]]]; y <- wide[[pr[2]]]
+    wt <- suppressWarnings(wilcox.test(x, y, paired = TRUE, exact = FALSE,
+                                       conf.int = TRUE, conf.level = 0.95))
+    tibble(Modification = mod,
+           Pair = paste(pr, collapse = " vs "),
+           n = nrow(wide),
+           HL_estimate = unname(wt$estimate),
+           conf.low = wt$conf.int[1],
+           conf.high = wt$conf.int[2],
+           p.value = wt$p.value)
+  })) %>% mutate(p.adj.holm = p.adjust(p.value, method = "holm"))
+}) %>% bind_rows()
+
+mods_order <- sort(unique(region_pct$Modification))
+mod_pairs  <- combn(mods_order, 2, simplify = FALSE)
+
+friedman_across_mod <- lapply(region_levels, function(reg) {
+  wide <- region_pct %>%
+    filter(Region == reg) %>%
+    dplyr::select(BaseID, Modification, percent) %>%
+    tidyr::pivot_wider(names_from = Modification, values_from = percent) %>%
+    # keep rows with all mods present
+    tidyr::drop_na(all_of(mods_order))
+  n <- nrow(wide); k <- length(mods_order)
+  if (n >= 2) {
+    M <- as.matrix(wide[, mods_order, drop = FALSE])
+    ft <- friedman.test(M)
+    W  <- unname(ft$statistic) / (n * (k - 1))
+    tibble(Region = reg,
+           n = n, df = unname(ft$parameter),
+           statistic = unname(ft$statistic),
+           p.value = ft$p.value,
+           Kendall_W = W)
+  } else {
+    tibble(Region = reg, n = n, df = NA_integer_,
+           statistic = NA_real_, p.value = NA_real_, Kendall_W = NA_real_)
+  }
+}) %>% bind_rows() %>%
+  mutate(p.adj.BH = p.adjust(p.value, method = "BH"))
+
+posthoc_across_mod <- lapply(region_levels, function(reg) {
+  wide <- region_pct %>%
+    filter(Region == reg) %>%
+    dplyr::select(BaseID, Modification, percent) %>%
+    tidyr::pivot_wider(names_from = Modification, values_from = percent) %>%
+    tidyr::drop_na(all_of(mods_order))
+  if (nrow(wide) < 2) return(tibble())
+  bind_rows(lapply(mod_pairs, function(pr) {
+    x <- wide[[pr[1]]]; y <- wide[[pr[2]]]
+    wt <- suppressWarnings(wilcox.test(x, y, paired = TRUE, exact = FALSE,
+                                       conf.int = TRUE, conf.level = 0.95))
+    tibble(Region = reg,
+           Pair = paste(pr, collapse = " vs "),
+           n = nrow(wide),
+           HL_estimate = unname(wt$estimate),   # (mod1 - mod2)
+           conf.low = wt$conf.int[1],
+           conf.high = wt$conf.int[2],
+           p.value = wt$p.value)
+  })) %>% mutate(p.adj.holm = p.adjust(p.value, method = "holm"))
+}) %>% bind_rows()
+
+# ---------- Inspect results ----------
+friedman_within_mod
+posthoc_within_mod
+friedman_across_mod
+posthoc_across_mod
+
+# Optional: write tables
+# write.csv(friedman_within_mod, "stats_within_mod_friedman.csv", row.names = FALSE)
+# write.csv(posthoc_within_mod,  "stats_within_mod_posthoc.csv",  row.names = FALSE)
+# write.csv(friedman_across_mod, "stats_across_mod_friedman.csv", row.names = FALSE)
+# write.csv(posthoc_across_mod,  "stats_across_mod_posthoc.csv",  row.names = FALSE)
+
+```
+
+
+```{r}
+library(dplyr)
+library(stringr)
+library(forcats)
+library(ggplot2)
+library(scales)
+
+normalize_region <- function(x) {
+  y <- tolower(trimws(x)); y <- gsub("[ _-]", "", y)
+  dplyr::case_when(
+    str_detect(y, "^(5'utr|utr5'|5utr|utr5|fiveprimeutr|fiveprime)$") ~ "5'UTR",
+    str_detect(y, "^(cds|codingsequence|cdsregion)$") ~ "CDS",
+    str_detect(y, "^(3'utr|utr3'|3utr|utr3|threeprimeutr|threeprime)$") ~ "3'UTR",
+    TRUE ~ NA_character_)
+}
+
+
+ap <- annotated_peaks %>%
+  mutate(Region = normalize_region(Location)) %>%
+  dplyr::filter(!is.na(Region), !is.na(Gene_ID), Gene_ID != "") %>%
+  mutate(Region = factor(Region, levels = c("5'UTR","CDS","3'UTR")))
+
+metric <- "genes" #"peaks"
+
+denom_scope <- "3regions"  
+
+region_counts <- ap %>%
+  group_by(Sample, Modification, Group, Region) %>%
+  summarise(n = if (metric == "genes") n_distinct(Gene_ID) else dplyr::n(),
+            .groups = "drop")
+
+
+if (denom_scope == "3regions") {
+  totals <- region_counts %>%
+    group_by(Sample, Modification, Group) %>%
+    summarise(total = sum(n), .groups = "drop")
+} else {
+  totals <- annotated_peaks %>%
+    mutate(RegionAll = normalize_region(Location)) %>%
+    group_by(Sample, Modification, Group) %>%
+    summarise(total = if (metric == "genes") n_distinct(Gene_ID) else dplyr::n(),
+              .groups = "drop")
+}
+
+
+region_pct <- region_counts %>%
+  left_join(totals, by = c("Sample","Modification","Group")) %>%
+  mutate(percent = ifelse(total > 0, n / total, NA_real_))
+
+region_colors <- c("5'UTR" = "#268BD2", "CDS" = "#DC322F", "3'UTR" = "#2AA198")
+
+p <- ggplot(region_pct, aes(x = Region, y = percent, fill = Region)) +
+  geom_boxplot(outlier.shape = NA, width = 0.7) +
+  geom_jitter(aes(color = Group), width = 0.15, height = 0, alpha = 0.9, size = 3) +
+  stat_summary(fun = median, geom = "text", aes(label = scales::percent(..y.., accuracy = 0.1)), vjust = -0.6, size = 3.2) +
+  scale_fill_manual(values = region_colors) +
+    scale_color_manual(values = group_colors, guide = guide_legend(title = "Group")) +
+  scale_y_continuous(labels = percent_format(accuracy = 1), expand = expansion(mult = c(0.02, 0.1))) +
+  facet_wrap(~ Modification, nrow = 1) +
+  labs(title = paste0("Percent ", ifelse(metric == "genes","of genes","of modified sites"),  " in 5'UTR, CDS, 3'UTR by modification"), x = "Region", y = paste0("Percent ", ifelse(metric == "genes","of genes","of modified sites"))) +
+  theme_classic(base_size = 12) +
+  theme(strip.text = element_text(face = "bold"), axis.text.x = element_text(size = 10))
+
+print(p)
+
+
+
+# Optional: save
+# ggsave(paste0("box_percent_", metric, "_by_region_by_mod.png"), p, width = 9, height = 4, dpi = 300)
+
+```
+
+
+Visualize regional enrichment of modifications or genes
+The script generates boxplots of the percentage of genes or modification sites located in each transcript region (5'UTR, CDS, 3'UTR), separated by modification type (m6A, m5C, Ψ, etc.).
+
+Compare regions statistically
+It performs paired Wilcoxon tests (non-parametric) to see whether the percentages differ between regions, pairing by sample to account for repeated measurements within the same dataset.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(rstatix)
+library(ggpubr)
+library(forcats)
+library(scales)
+
+
+region_pct <- region_pct %>%
+  mutate(Region = factor(Region, levels = c("5'UTR", "CDS", "3'UTR")))
+
+# --- Define colors for regions ---
+region_colors <- c("5'UTR" = "#268BD2", "CDS" = "#DC322F", "3'UTR" = "#2AA198")
+
+mods <- unique(region_pct$Modification)
+
+
+plots_by_mod <- lapply(mods, function(mod) {
+  
+  dat <- region_pct %>%
+    filter(Modification == mod, !is.na(percent))
+  
+  dat_complete <- dat %>%
+    group_by(Sample) %>%
+    filter(n_distinct(Region) == 3) %>%
+    ungroup()
+  
+  dropped <- setdiff(dat$Sample, dat_complete$Sample)
+  if(length(dropped) > 0) {
+    warning("Samples dropped (missing regions) for modification ", mod, ": ", paste(dropped, collapse=", "))
+  }
+  
+
+  st <- dat_complete %>%
+    pairwise_wilcox_test(percent ~ Region, paired = TRUE, id = "Sample", p.adjust.method = "holm") %>%
+    add_significance(p.col = "p.adj")
+  
+  y_max <- max(dat$percent, na.rm = TRUE)
+  st <- st %>%
+    arrange(group1, group2) %>%
+    mutate(
+      y.position = y_max + row_number() * 0.06,
+      label = paste0("p=", scales::pvalue(p.adj, accuracy = 0.001)))
+  
+  ggplot(dat, aes(x = Region, y = percent, fill = Region)) +
+    geom_boxplot(outlier.shape = NA, width = 0.7) +
+    geom_jitter(aes(color = Group), width = 0.15, alpha = 0.65, size = 3) + 
+    stat_summary(fun = median, geom = "text", aes(label = scales::percent(..y.., accuracy = 0.1)), vjust = -0.6, size = 3.2) +
+    ggpubr::stat_pvalue_manual(st, label = "label", xmin = "group1", xmax = "group2", y.position = "y.position", tip.length = 0.01, bracket.size = 0.5, size = 3, hide.ns = FALSE) +
+    scale_fill_manual(values = region_colors) +  # apply region colors
+    scale_y_continuous(labels = percent_format(accuracy = 1), expand = expansion(mult = c(0.02, 0.20))) +
+    labs(title = paste0("Percent of ", ifelse(metric == "genes", "genes", "sites"), " by region: ", mod), x = "Region", y = paste0("Percent of ", ifelse(metric == "genes", "genes", "sites")),
+      color = "Group") + theme_classic(base_size = 12) +
+    theme(plot.margin = margin(5.5, 30, 5.5, 5.5), strip.text = element_text(face = "bold"))
+})
+
+names(plots_by_mod) <- mods
+
+# --- Print all plots ---
+for (m in mods) print(plots_by_mod[[m]])
+
+
+```
+
+
+
+
+# check if peaks in the 5utr, 3utr or CDS are most modified
+
+```{r}
+mod_region_data <- Map(function(df, name) {
+  df %>%
+    filter(Location %in% c("5'UTR", "CDS", "3'UTR")) %>%
+    dplyr::select(Location, percent_modified) %>%
+    mutate(Sample = name)
+}, filtered_dfs, sample_ids) %>%
+  bind_rows()
+
+
+
+region_summary <- mod_region_data %>%
+  group_by(Sample, Location) %>%
+  summarise(
+    Mean_Modification = mean(percent_modified, na.rm = TRUE),
+    Median_Modification = median(percent_modified, na.rm = TRUE),
+    N = n(),
+    .groups = "drop")
+
+print(region_summary)
+
+
+top_regions <- region_summary %>%
+  group_by(Sample) %>%
+  slice_max(order_by = Mean_Modification, n = 1) %>%
+  dplyr::select(Sample, TopRegion = Location, MaxMean = Mean_Modification)
+
+print(top_regions)
+
+```
+
+
+
+```{r, message=FALSE}
+mod_region_data <- Map(function(df, name) {
+  df |>
+    filter(Location %in% c("5'UTR", "CDS", "3'UTR")) |>
+    dplyr::select(Location, percent_modified) |>
+    mutate(Sample = name)
+}, filtered_dfs, sample_ids) |>
+  bind_rows()
+
+
+mod_region_data$Location <- factor(mod_region_data$Location, levels = c("5'UTR", "CDS", "3'UTR"))
+
+
+region_split <- split(mod_region_data, mod_region_data$Sample)
+
+region_colors <- c("5'UTR" = "#268BD2", "CDS" = "#DC322F", "3'UTR" = "#2AA198")
+
+plot_region_box <- function(df, sample_name) {
+  ggplot(df, aes(x = Location, y = percent_modified, fill = Location)) +
+    #geom_violin(show.legend = F, adjust=0.25, alpha=0.5) +
+    geom_boxplot(outlier.shape = NA, width = 0.6, notch = T) +
+    geom_jitter(show.legend = F, width = 0.25, shape =21, color = "black", size = 0.5) +
+    #geom_dotplot(binaxis='y', stackdir='center', stackratio=0.5, dotsize=0.5) + #binwidth = 0.2
+    scale_fill_manual(values = region_colors) +
+    stat_compare_means(method = "wilcox.test", label = "p.signif", hide.ns = FALSE,
+                       comparisons = combn(levels(df$Location), 2, simplify = FALSE)) +
+    labs(title = paste("% modified in ", sample_name),
+         x = " ", y = "% modified") +
+    ylim(20, 120) +
+    theme_minimal(base_size = 13) +
+    theme(axis.text.x = element_text(size = 11),axis.title = element_text(size = 13, face = "bold"), plot.title = element_text(size = 15, face = "bold", hjust = 0.5),
+      legend.position = "none")
+}
+
+
+region_box_plots <- lapply(names(region_split), function(s) {
+  plot_region_box(region_split[[s]], s)
+})
+
+
+for (p in region_box_plots) print(p)
+
+```
+
+
+
+
+### Peak distribution Ψ
+```{r}
+
+peak_files <- list(
+  "W1118_Rep1_m6A" = W1118_r1_a_mRNA,
+  "W1118_Rep1_m5C" = W1118_r1_m_mRNA,
+  'W1118_Rep1_Ψ' = W1118_r1_pseu_mRNA,
+  "W1118_Rep2_m6A" = W1118_r2_a_mRNA,
+  'W1118_Rep2_m5C' = W1118_r2_m_mRNA,
+  'W1118_Rep2_Ψ' = W1118_r2_pseu_mRNA,
+  'W1118_Rep3_m6A' = W1118_r3_a_mRNA,
+  'W1118_Rep3_m5C' = W1118_r3_m_mRNA,
+  'W1118_Rep3_Ψ' = W1118_r3_pseu_mRNA,
+  'FR113_Rep1_m6A' = FR1113N_r1_a_mRNA,
+  'FR113_Rep1_m5C' = FR1113N_r1_m_mRNA,
+  "FR113_Rep1_Ψ" = FR1113N_r1_pseu_mRNA,
+  "FR113_Rep2_m6A" = FR1113N_r2_a_mRNA,
+  "FR113_Rep2_m5C" = FR1113N_r2_m_mRNA, 
+  "FR113_Rep2_Ψ" = FR1113N_r2_pseu_mRNA,
+  "FR113_Rep3_m6A" = FR1113N_r3_a_mRNA,
+  "FR113_Rep3_m5C" = FR1113N_r3_m_mRNA, 
+  "FR113_Rep3_Ψ" = FR1113N_r3_pseu_mRNA,
+  "Mettl3_Rep1_m6A" = Mettl3_r1_a_mRNA,
+  "Mettl3_Rep1_m5C" = Mettl3_r1_m_mRNA, 
+  "Mettl3_Rep1_Ψ" = Mettl3_r1_pseu_mRNA,
+  "Mettl3_Rep2_m6A" = Mettl3_r2_a_mRNA,
+  "Mettl3_Rep2_m5C" = Mettl3_r2_m_mRNA, 
+  "Mettl3_Rep2_Ψ" = Mettl3_r2_pseu_mRNA)
+
+
+feature_colors <- c("5'UTR" = "#268BD2", "CDS" = "#DC322F", "3'UTR" = "#2AA198", "intron" = "#99FF99", "Others" = "#FFD700")
+
+
+plot_pie_chart <- function(df, name) {
+  
+  df$Location[is.na(df$Location) | df$Location == "N/A" | df$Location == "null"] <- "Others"
+  
+
+  location_freq <- table(df$Location)
+  location_labels <- names(location_freq)
+  
+  location_pct <- round(location_freq / sum(location_freq) * 100, 1)
+  labels <- paste(location_labels, " (", location_freq, ", ", location_pct, "%)", sep = "")
+  
+  colors <- feature_colors[location_labels]
+  
+  pie(location_freq, labels = labels, main = paste("Distrubtion of peaks across the genome in", name), col = colors)
+}
+
+# Generate pie charts for each dataset
+for (name in names(peak_files)) {
+  plot_pie_chart(peak_files[[name]], name)
+}
+
+```
+
+```{r}
+library(tidyverse)
+
+# your colours (unchanged)
+feature_colors <- c("5'UTR" = "#268BD2", "CDS" = "#DC322F", "3'UTR" = "#2AA198",
+                    "intron"= "#99FF99",
+                    "Others"= "#FFD700")
+
+# build combined table from list of data.frames (peak_files)
+combined <- imap_dfr(peak_files, ~ {
+  df <- as_tibble(.x)
+  # If a Location column doesn't exist, attempt common alternatives or stop gracefully
+  if (!"Location" %in% names(df)) stop(paste("data frame for", .y, "has no column named 'Location'"))
+  df <- df %>%
+    mutate(Location = if_else(is.na(Location) | Location %in% c("N/A", "null", "NULL", ""), "Others", Location),
+           Sample = .y)
+  df %>% dplyr::select(Sample, Location)
+})
+
+# parse sample name into components: Strain, Rep, Modification
+# expects names like "W1118_Rep1_m6A" (works for your naming scheme)
+combined <- combined %>%
+  separate(Sample, into = c("Strain", "Rep", "Mod"), sep = "_", extra = "merge", fill = "right")
+
+# compute counts and percentages
+plot_data <- combined %>%
+  count(Strain, Rep, Mod, Location, name = "n") %>%
+  group_by(Strain, Rep, Mod) %>%
+  mutate(pct = n / sum(n) * 100) %>%
+  ungroup() %>%
+  # create a sample label for x-axis (e.g. "W1118 Rep1")
+  mutate(SampleLabel = paste0(Strain, "_", Rep),
+         # keep Mod as factor in desired order if needed
+         Mod = factor(Mod, levels = c("m6A", "m5C", "pseu", "Ψ", "Psi", "Psi?"), ordered = FALSE))
+
+# If your pseudouridine label is "pseu" or "Ψ", above factor levels can be adapted.
+# Ensure colours map to the actual Location factor levels present
+locations_present <- unique(plot_data$Location)
+missing_colors <- setdiff(locations_present, names(feature_colors))
+if (length(missing_colors) > 0) {
+  # assign a palette color for any unexpected categories
+  extra <- setNames(RColorBrewer::brewer.pal(length(missing_colors), "Set3"), missing_colors)
+  feature_colors <- c(feature_colors, extra)
+}
+
+# Plot: 100% stacked bar per sample, faceted by modification
+p <- ggplot(plot_data, aes(x = SampleLabel, y = pct, fill = Location)) +
+  geom_col(width = 0.8) +
+  facet_wrap(~ Mod, scales = "free_x", nrow = 1) +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 100), labels = function(x) paste0(x, "%")) +
+  scale_fill_manual(values = feature_colors, breaks = names(feature_colors)) +
+  labs(x = NULL, y = "Percent of modified sites", fill = "Genomic feature",
+       title = "Distribution of modifed sites across genomic features (per sample)") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+    strip.background = element_rect(fill = "#F0F0F0", colour = NA),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank())
+
+# Add percent labels inside the stacks where space allows
+p <- p + geom_text(aes(label = ifelse(pct >= 5, paste0(round(pct,1), "%"), "")),
+                   position = position_stack(vjust = 0.5), size = 2.8)
+
+# Show plot
+print(p)
+
+```
+
+
+## Use alluvial plot:
+
+From this plot, you can draw:
+
+🔹 1. m6A and Ψ modifications are more abundant in FR113N Replicates
+In Rep1 and Rep2, FR113N shows larger streams leading to m6A and Ψ than W1118.
+
+Suggests a group-level increase in these modifications.
+
+🔹 2. Ψ and m6A strongly target 3′UTRs
+Across replicates, Ψ has consistent strong flows to 3′UTR (red).
+
+m6A splits between CDS and 3′UTR, but is skewed toward 3′UTR in FR113N.
+
+🔹 3. m5C consistently targets CDS
+Very prominent and reproducible flow from m5C → CDS across all replicates.
+
+Suggests conserved m5C localization to coding regions.
+
+🔹 4. Intron and "Others" are minor contributors
+These are thin and peripheral, likely noise, unannotated regions, or non-coding RNA.
+
+🔹 5. Reproducibility is solid for W1118
+
+```{r}
+library(ggalluvial)
+# Step 1: Combine and annotate
+annot_df <- Map(function(df, sample) {
+  df %>%
+    mutate(
+      mod = as.character(mod),  # Converts mod to character
+      Location = ifelse(Location %in% c("", "null", "N/A", NA), "Others", Location),
+      Sample = sample)
+}, peak_files, names(peak_files)) %>%
+  bind_rows() %>%
+  mutate(Group = ifelse(grepl("^W1118", Sample), "W1118", "FR113N"),
+    Modification = case_when(
+      grepl("m6A", Sample) ~ "m6A",
+      grepl("m5C", Sample) ~ "m5C",
+      grepl("Ψ", Sample) ~ "Ψ",
+      TRUE ~ "Other"),
+    Replicate = case_when(
+      grepl("Rep1", Sample) ~ "Rep1",
+      grepl("Rep2", Sample) ~ "Rep2",
+      grepl("Rep3", Sample) ~ "Rep3",
+      TRUE ~ "unknown"))
+
+# Step 2: Summarize counts
+flow_data <- annot_df %>%
+  group_by(Replicate, Group, Modification, Location) %>%
+  summarise(Peak_Count = n(), .groups = "drop")
+
+# Step 3: Add percent labels (per replicate)
+flow_data <- flow_data %>%
+  group_by(Replicate) %>%
+  mutate(Percent = Peak_Count / sum(Peak_Count) * 100) %>%
+  ungroup()
+
+custom_colors <- c(
+ "5'UTR" = "#268BD2", "CDS" = "#DC322F", "3'UTR" = "#2AA198",
+  "intron" = "cyan",
+  "Others" = "gold")
+
+
+# Step 4: Plot with ggalluvial
+ggplot(flow_data, aes(axis1 = Group, axis2 = Modification, axis3 = Location, y = Peak_Count)) +
+  geom_alluvium(aes(fill = Location), width = 1/12, alpha = 0.7) +
+  geom_stratum(width = 1/12, fill = "gray95", color = "black") +
+  geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 3.2) +  # axis labels
+  #geom_text(stat = "alluvium", aes(label = ifelse(Peak_Count > 100, Peak_Count, "")),
+  #        size = 2.5, color = "black", nudge_x = 0.05) +
+   scale_fill_manual(values = custom_colors) +
+  facet_wrap(~ Replicate, scales = "free_y") +
+  theme_minimal(base_size = 13) +
+  labs(title = "Distribution of mods across the genome",
+    y = "Peak Count",
+    fill = "Location") +
+  theme(strip.text = element_text(size = 12, face = "bold"),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "right") + theme_classic()
+```
+
+
+
+
+
+```{r, message=FALSE, warning=FALSE}
+library(pheatmap)
+library(tidyverse)
+create_top_50_heatmap_percent <- function(df, dataset_name) {
+  df_filtered <- df %>%
+    filter(Location %in% c("5'UTR", "CDS", "3'UTR")) %>%
+    group_by(Gene_ID, Location) %>%
+    summarize(percent_modified = mean(score, na.rm = TRUE), .groups = "drop")
+  
+  # Get top 50 genes by overall mean percent_modified across regions
+  top_genes <- df_filtered %>%
+    group_by(Gene_ID) %>%
+    summarize(Average_Modification = mean(percent_modified, na.rm = TRUE), .groups = "drop") %>%
+    top_n(100, wt = Average_Modification) %>%
+    pull(Gene_ID)
+  
+  # Filter and pivot to wide format
+  df_top <- df_filtered %>% filter(Gene_ID %in% top_genes)
+
+  df_wide <- df_top %>%
+    pivot_wider(names_from = Location, values_from = percent_modified, values_fill = list(percent_modified = 0)) %>%
+    dplyr::select(Gene_ID, `5'UTR`, CDS, `3'UTR`)
+  
+  gene_matrix <- as.matrix(df_wide[,-1])
+  rownames(gene_matrix) <- df_wide$Gene_ID
+  
+  pheatmap(gene_matrix,
+           cluster_rows = FALSE,
+           cluster_cols = FALSE,
+           main = paste("Heatmap of top 50 genes by % modified:", dataset_name),
+           color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+           scale = "none",
+           border_color = "grey60",
+           treeheight_row = 50)
+}
+
+for (dataset_name in names(peak_files)) {
+  create_top_50_heatmap_percent(peak_files[[dataset_name]], dataset_name)
+}
+
+```
+
+
+```{r}
+# Count peaks for each sample and store them in a new data frame
+peak_counts <- sapply(peak_files, nrow)
+peak_counts_df <- data.frame(
+  Sample = factor(names(peak_counts), levels = names(peak_counts)),
+  Peaks = peak_counts)
+
+# Plot the bar plot
+mod.dist <- ggplot(peak_counts_df, aes(x = Sample, y = Peaks, fill = Sample)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  geom_text(aes(label = Peaks), vjust = -0.3, color = "black", size = 3.5) +
+  scale_fill_manual(values = c('W1118_Rep1_m6A' = "#1b9e77", 'W1118_Rep1_m5C' = "#1b9e77", 'W1118_Rep1_Ψ' = "#1b9e77", 'W1118_Rep2_m6A' = "#1b9e77", 'W1118_Rep2_m5C' = "#1b9e77", 'W1118_Rep2_Ψ' = "#1b9e77", 'W1118_Rep3_m6A' = "#1b9e77", 'W1118_Rep3_m5C' = "#1b9e77", 'W1118_Rep3_Ψ' = "#1b9e77", "FR113_Rep1_m6A" = "#d95f02", "FR113_Rep1_m5C" = "#d95f02", "FR113_Rep1_Ψ" = "#d95f02", "FR113_Rep2_m6A" = "#d95f02", "FR113_Rep2_m5C" = "#d95f02", "FR113_Rep2_Ψ" = "#d95f02","FR113_Rep3_m6A" = "#d95f02","FR113_Rep3_m5C" = "#d95f02", "FR113_Rep3_Ψ" = "#d95f02","Mettl3_Rep1_m6A" = "#7570b3", "Mettl3_Rep1_m5C" = "#7570b3", "Mettl3_Rep1_Ψ" = "#7570b3", "Mettl3_Rep2_m6A" = "#7570b3","Mettl3_Rep2_m5C" = "#7570b3", "Mettl3_Rep2_Ψ" = "#7570b3")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Number of Peaks per Sample(RNA004)", x = "Sample", y = "Number of mod identified") + theme(plot.title = element_text(hjust = 0.5)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + theme_classic(base_size = 22, base_family = "Times New Roman") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 12),
+        legend.position = "right", size = 12,
+        legend.text=element_text(size=12, family = "Times New Roman")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+
+
+mod.dist
+```
+
+check correlation between replicate 
+
+```{r}
+library(plotly)
+# Define shared and unique peaks
+key_cols <- c("chrom", "start", "Gene_ID")
+
+# Add origin labels
+rep1_only <- anti_join(W1118_r1_pseu_mRNA, W1118_r2_pseu_mRNA, by = key_cols) %>% mutate(origin = "Rep1 Only")
+rep2_only <- anti_join(W1118_r2_pseu_mRNA, W1118_r1_pseu_mRNA, by = key_cols) %>% mutate(origin = "Rep2 Only")
+shared <- inner_join(W1118_r1_pseu_mRNA, W1118_r2_pseu_mRNA, by = key_cols, suffix = c("_rep1", "_rep2")) %>%
+  mutate(origin = "Shared")
+
+# Count numbers
+n_shared <- nrow(shared)
+n_rep1 <- nrow(rep1_only)
+n_rep2 <- nrow(rep2_only)
+
+# Scatter plot for shared
+p <- plot_ly()
+
+if (n_shared > 0) {
+  p <- p %>% add_trace(data = shared, x = ~score_rep1, y = ~score_rep2, type = 'scatter', mode = 'markers', name = paste("Shared (", n_shared, ")", sep = ""), marker = list(color = 'rgba(93, 164, 214, 0.8)', size = 6), text = ~paste("Gene_ID:", Gene_ID))
+}
+
+if (n_rep1 > 0) {
+  p <- p %>% add_trace(data = rep1_only, x = ~score, y = rep(0, n_rep1), type = 'scatter', mode = 'markers', name = paste("Rep1 Only (", n_rep1, ")", sep = ""), marker = list(color = 'rgba(255, 99, 71, 0.7)', size = 6), text = ~paste("Gene_ID:", Gene_ID))}
+
+if (n_rep2 > 0) {
+  p <- p %>% add_trace(data = rep2_only, x = rep(0, n_rep2), y = ~score, type = 'scatter', mode = 'markers', name = paste("Rep2 Only (", n_rep2, ")", sep = ""), marker = list(color = 'rgba(100, 200, 100, 0.7)', size = 6), text = ~paste("Gene_ID:", Gene_ID))
+}
+
+# Add layout
+p <- p %>% layout(
+  title = "Correlation of m6A Peaks: W1118 Rep1 vs Rep2",
+  xaxis = list(title = "Replicate 1 Score"),
+  yaxis = list(title = "Replicate 2 Score"),
+  legend = list(title = list(text = "<b> Peak Origin </b>")),
+  hovermode = "closest")
+
+# Add correlation coefficient as annotation
+if (n_shared > 1) {
+  cor_val <- cor(shared$score_rep1, shared$score_rep2, method = "pearson", use = "complete.obs")
+  p <- p %>% layout(annotations = list(list(x = 0.05, y = 0.95,text = paste("Pearson r =", round(cor_val, 2)), showarrow = FALSE, xref = "paper", yref = "paper", font = list(size = 12))))
+}
+
+```
+
+
+
+
+```{r}
+plot_peak_cor <- function(rep1, rep2, label, score_col = "score", key_cols = c("chrom","start","end","Gene_ID"), cor_method = "pearson") {
+  # sanity checks
+  missing1 <- setdiff(key_cols, names(rep1))
+  missing2 <- setdiff(key_cols, names(rep2))
+  if (length(missing1) || length(missing2)) {
+    stop("Missing key columns: ",
+         if (length(missing1)) paste0("\n rep1: ", paste(missing1, collapse=", ")),
+         if (length(missing2)) paste0("\n rep2: ", paste(missing2, collapse=", ")))
+  }
+  if (!score_col %in% names(rep1) || !score_col %in% names(rep2)) {
+    stop("'", score_col, "' must exist in both data frames.")
+  }
+
+  # split into shared / unique
+  rep1_only <- anti_join(rep1, rep2, by = key_cols)
+  rep2_only <- anti_join(rep2, rep1, by = key_cols)
+  shared <- inner_join(rep1, rep2, by = key_cols, suffix = c("_rep1", "_rep2"))
+
+  # counts for legend labels
+  n_shared <- nrow(shared); n_rep1 <- nrow(rep1_only); n_rep2 <- nrow(rep2_only)
+  labels <- c(
+    Shared = paste0("Shared (", n_shared, ")"),
+    `Rep1 Only` = paste0("Rep1 Only (", n_rep1, ")"),
+    `Rep2 Only` = paste0("Rep2 Only (", n_rep2, ")"))
+
+  to_num <- function(x) suppressWarnings(as.numeric(x))
+
+  shared_plot <- shared %>%
+    transmute(x = to_num(.data[[paste0(score_col, "_rep1")]]),
+      y = to_num(.data[[paste0(score_col, "_rep2")]]), 
+      Gene_ID, dataset = labels["Shared"])
+
+  rep1_only_plot <- rep1_only %>%
+    transmute(x = to_num(.data[[score_col]]), y = 0, Gene_ID, dataset = labels["Rep1 Only"])
+
+  rep2_only_plot <- rep2_only %>%
+    transmute(x = 0, y = to_num(.data[[score_col]]), Gene_ID, dataset = labels["Rep2 Only"])
+
+  plot_data <- bind_rows(shared_plot, rep1_only_plot, rep2_only_plot)
+
+  # base plot
+  p <- ggplot(plot_data, aes(x = x, y = y, color = dataset)) +
+    geom_point(alpha = 0.6, size = 2) +
+    scale_color_manual(values = setNames(c("#3B9AB2", "#F21A00", "#E4B80E"), c(labels["Shared"], labels["Rep1 Only"], labels["Rep2 Only"]))) +
+    theme_classic(base_size = 14) +
+    theme( legend.title = element_blank(), panel.grid = element_blank(), axis.title  = element_text(face = "bold"), plot.title = element_text(size = 12, face = "bold", hjust = 0.5), axis.title.x = element_text(size = 12), axis.title.y = element_text(size = 12),  axis.text = element_text(size = 12), legend.text  = element_text(size = 12)) +
+    labs(title = paste(" ", label), x = paste("Replicate 1", score_col), y = paste("Replicate 2", score_col))
+
+  # correlation for shared points only
+  if (n_shared > 1) {
+    cor_val <- suppressWarnings(
+      cor(shared_plot$x, shared_plot$y, method = cor_method, use = "complete.obs"))
+    if (is.finite(cor_val)) {
+      p <- p + annotate(
+        "text", x = Inf, y = -Inf,
+        label = paste("Pearson r =", round(cor_val, 2)),
+        hjust = 1.1, vjust = -1.1, size = 5, color = "black")
+    }
+  }
+
+  p
+}
+
+```
+
+
+```{r}
+
+W1118_r1_a_cor <- plot_peak_cor(W1118_r1_a_mRNA, W1118_r2_a_mRNA, "W1118 m6A", score_col = "score")
+W1118_r1_m_cor <- plot_peak_cor(W1118_r1_m_mRNA, W1118_r2_m_mRNA, "W1118 m5C", score_col = "score")
+W1118_r1_psi_cor <- plot_peak_cor(W1118_r1_pseu_mRNA, W1118_r2_pseu_mRNA, "W1118 Pseudouridine", score_col = "score")
+
+FR113_r1_a_cor <- plot_peak_cor(FR1113N_r2_a_mRNA, FR1113N_r3_a_mRNA, "FR113N m6A", score_col = "score")
+FR113_r1_m_cor <- plot_peak_cor(FR1113N_r2_m_mRNA, FR1113N_r3_m_mRNA, "FR113N m5C", score_col = "score")
+FR113_r1_psi_cor <- plot_peak_cor(FR1113N_r2_pseu_mRNA, FR1113N_r3_pseu_mRNA, "FR113N Pseudouridine", score_col = "score")
+
+Mettl3_r1_a_cor <- plot_peak_cor(Mettl3_r1_a_mRNA, Mettl3_r2_a_mRNA, "Mettl3-KO m6A", score_col = "score")
+Mettl3_r1_m_cor <- plot_peak_cor(Mettl3_r1_m_mRNA, Mettl3_r2_m_mRNA, "Mettl3-KO m5C", score_col = "score")
+Mettl3_r1_psi_cor <- plot_peak_cor(Mettl3_r1_pseu_mRNA, Mettl3_r2_pseu_mRNA, "Mettl3-KO Pseudouridine", score_col = "score")
+
+
+
+#W1118_r1_a_cor = merge(W1118_r1_a_mRNA, W1118_r2_a_mRNA, by = c("end", "score"), suffixes = c("_rep1", "_rep2"))
+library(patchwork)
+comp_FR_w1118_Mettl3 <- 
+  (W1118_r1_a_cor | W1118_r1_m_cor | W1118_r1_psi_cor) /
+  (FR113_r1_a_cor | FR113_r1_m_cor | FR113_r1_psi_cor) /
+  (Mettl3_r1_a_cor | Mettl3_r1_m_cor | Mettl3_r1_psi_cor) +
+
+  plot_annotation(
+    title = "",
+    theme = theme(plot.title = element_text(size = 12, family = "Times New Roman")),
+    tag_levels = 'A') &
+  theme(
+    text = element_text(size = 12), 
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    strip.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 12))
+```
+
+# Patch work Figure 1
+```{r}
+library(patchwork)
+library(forcats)
+Figure1 <- (percent_mod | read_length_a) / (mod.dist | final_plot) +
+  plot_annotation(title = " ", theme = theme(plot.title = element_text(size = 12, family = "Times New Roman")), tag_levels = 'A') &
+  theme(text = element_text(size = 12),  axis.title = element_text(size = 12), axis.text = element_text(size = 12), strip.text = element_text(size = 12), legend.text = element_text(size = 12), legend.title = element_text(size = 12))
+
+#plot_list$W1118 | plot_list$FR113N | plot_list$`Mettl3-KO`kmer_m6a / m5C_Kmer
+Figure1_A <- (plot_list$W1118 | plot_list$FR113N| plot_list$`Mettl3-KO`) +
+  plot_annotation(title = " ", theme = theme(plot.title = element_text(size = 18, family = "Times New Roman")), tag_levels = 'A') &
+  theme(text = element_text(size = 18),  axis.title = element_text(size = 18), axis.text = element_text(size = 18), strip.text = element_text(size = 18), legend.text = element_text(size = 18), legend.title = element_text(size = 18))
+
+Figure1_B <- (combined_fig) +
+  plot_annotation(title = " ", theme = theme(plot.title = element_text(size = 12, family = "Times New Roman")), tag_levels = 'A') &
+  theme(text = element_text(size = 12),  axis.title = element_text(size = 12), axis.text = element_text(size = 12), strip.text = element_text(size = 12), legend.text = element_text(size = 12), legend.title = element_text(size = 12))
+```
+
+
+
+# metaplot of m6A
+```{r}
+library(Guitar)
+library(GenomicRanges)
+
+m6A.stGRangeLists <- list(
+  "W1118 Rep1" = GRanges(seqnames = W1118_r1_a_mRNA$chrom,
+                         ranges = IRanges(start = W1118_r1_a_mRNA$start,
+                                          end = W1118_r1_a_mRNA$end)),
+  "W1118 Rep2" = GRanges(seqnames = W1118_r2_a_mRNA$chrom,
+                         ranges = IRanges(start = W1118_r2_a_mRNA$start,
+                                          end = W1118_r2_a_mRNA$end)),
+  "W1118 Rep3" = GRanges(seqnames = W1118_r3_a_mRNA$chrom,
+                         ranges = IRanges(start = W1118_r3_a_mRNA$start,
+                                          end = W1118_r3_a_mRNA$end)),
+  
+  "FR113 Rep1" = GRanges(seqnames = FR1113N_r1_a_mRNA$chrom,
+                         ranges = IRanges(start = FR1113N_r1_a_mRNA$start,
+                                          end = FR1113N_r1_a_mRNA$end)),
+  "FR113 Rep2" = GRanges(seqnames = FR1113N_r2_a_mRNA$chrom,
+                         ranges = IRanges(start = FR1113N_r2_a_mRNA$start,
+                                          end = FR1113N_r2_a_mRNA$end)),
+  "FR113 Rep3" = GRanges(seqnames = FR1113N_r3_a_mRNA$chrom,
+                         ranges = IRanges(start = FR1113N_r3_a_mRNA$start,
+                                          end = FR1113N_r3_a_mRNA$end)),
+  "Mettl3 KO Rep1" = GRanges(seqnames = Mettl3_r1_a_mRNA$chrom,
+                         ranges = IRanges(start = Mettl3_r1_a_mRNA$start,
+                                          end = Mettl3_r1_a_mRNA$end)),
+  "Mettl3-KO Rep2" = GRanges(seqnames = Mettl3_r2_a_mRNA$chrom,
+                         ranges = IRanges(start = Mettl3_r2_a_mRNA$start,
+                                          end = Mettl3_r2_a_mRNA$end)))
+
+
+```
+
+
+```{r}
+
+Txtd <- "~/Dropbox/dm6.sqlite"
+txdb <- loadDb(Txtd)
+
+m <- GuitarPlot(txTxdb = txdb,
+                stGRangeLists = m6A.stGRangeLists,
+                stGroupName = names(m6A.stGRangeLists),
+                headOrtail = FALSE,
+                enableCI = FALSE,
+                mapFilterTranscript = FALSE,
+                pltTxType = c("mrna"))
+
+m
+
+
+```
+
+
+# metaplot of m5C
+```{r}
+
+m5c_stGRangeLists <- list(
+  "W1118 Rep1" = GRanges(seqnames = W1118_r1_m_mRNA$chrom,
+                         ranges = IRanges(start = W1118_r1_m_mRNA$start,
+                                          end = W1118_r1_m_mRNA$end)),
+  "W1118 Rep2" = GRanges(seqnames = W1118_r2_m_mRNA$chrom,
+                         ranges = IRanges(start = W1118_r2_m_mRNA$start,
+                                          end = W1118_r2_m_mRNA$end)),
+  "W1118 Rep3" = GRanges(seqnames = W1118_r3_m_mRNA$chrom,
+                         ranges = IRanges(start = W1118_r3_m_mRNA$start,
+                                          end = W1118_r3_m_mRNA$end)),
+  
+  "FR113 Rep1" = GRanges(seqnames = FR1113N_r1_m_mRNA$chrom,
+                         ranges = IRanges(start = FR1113N_r1_m_mRNA$start,
+                                          end = FR1113N_r1_m_mRNA$end)),
+  "FR113 Rep2" = GRanges(seqnames = FR1113N_r2_m_mRNA$chrom,
+                         ranges = IRanges(start = FR1113N_r2_m_mRNA$start,
+                                          end = FR1113N_r2_m_mRNA$end)),
+  "FR113 Rep3" = GRanges(seqnames = FR1113N_r3_m_mRNA$chrom,
+                         ranges = IRanges(start = FR1113N_r3_m_mRNA$start,
+                                          end = FR1113N_r3_m_mRNA$end)),
+  "Mettl3 KO Rep1" = GRanges(seqnames = Mettl3_r1_m_mRNA$chrom,
+                         ranges = IRanges(start = Mettl3_r1_m_mRNA$start,
+                                          end = Mettl3_r1_m_mRNA$end)),
+  "Mettl3-KO Rep2" = GRanges(seqnames = Mettl3_r2_m_mRNA$chrom,
+                         ranges = IRanges(start = Mettl3_r2_m_mRNA$start,
+                                          end = Mettl3_r2_m_mRNA$end)))
+
+
+```
+
+
+```{r}
+
+m <- GuitarPlot(txTxdb = txdb,
+                stGRangeLists = m5c_stGRangeLists,
+                stGroupName = names(m5c_stGRangeLists),
+                headOrtail = FALSE,
+                enableCI = FALSE,
+                mapFilterTranscript = FALSE,
+                pltTxType = c("mrna"))
+
+m
+
+
+```
+
+
+
+# metaplot of m5C
+```{r}
+
+psi_stGRangeLists <- list(
+  "W1118 Rep1" = GRanges(seqnames = W1118_r1_pseu_mRNA$chrom,
+                         ranges = IRanges(start = W1118_r1_pseu_mRNA$start,
+                                          end = W1118_r1_pseu_mRNA$end)),
+  #"W1118 Rep2" = GRanges(seqnames = W1118_r2_pseu_mRNA$chrom,
+  #                       ranges = IRanges(start = W1118_r2_pseu_mRNA$start,
+  #                                        end = W1118_r2_pseu_mRNA$end)),
+ # "W1118 Rep3" = GRanges(seqnames = W1118_r3_pseu_mRNA$chrom,
+  #                       ranges = IRanges(start = W1118_r3_pseu_mRNA$start,
+  #                                        end = W1118_r3_pseu_mRNA$end)),
+  
+  "FR113 Rep1" = GRanges(seqnames = FR1113N_r1_pseu_mRNA$chrom,
+                         ranges = IRanges(start = FR1113N_r1_pseu_mRNA$start,
+                                          end = FR1113N_r1_pseu_mRNA$end)),
+  #"FR113 Rep2" = GRanges(seqnames = FR1113N_r2_pseu_mRNA$chrom,
+  #                       ranges = IRanges(start = FR1113N_r2_pseu_mRNA$start,
+  #                                        end = FR1113N_r2_pseu_mRNA$end)),
+  #"FR113 Rep3" = GRanges(seqnames = FR1113N_r3_pseu_mRNA$chrom,
+  #                       ranges = IRanges(start = FR1113N_r3_pseu_mRNA$start,
+  #                                        end = FR1113N_r3_pseu_mRNA$end)),
+  "Mettl3 KO Rep1" = GRanges(seqnames = Mettl3_r1_pseu_mRNA$chrom,
+                         ranges = IRanges(start = Mettl3_r1_pseu_mRNA$start,
+                                          end = Mettl3_r1_pseu_mRNA$end)))#,
+  #"Mettl3-KO Rep2" = GRanges(seqnames = Mettl3_r2_pseu_mRNA$chrom,
+  #                       ranges = IRanges(start = Mettl3_r2_pseu_mRNA$start,
+  #                                        end = Mettl3_r2_pseu_mRNA$end)))
+
+
+```
+
+
+```{r}
+
+mpsi <- GuitarPlot(txTxdb = txdb,
+                stGRangeLists = psi_stGRangeLists,
+                stGroupName = names(psi_stGRangeLists),
+                headOrtail = FALSE,
+                enableCI = FALSE,
+                mapFilterTranscript = FALSE,
+                pltTxType = c("mrna"))
+
+mpsi
+
+
+```
+
+Filter bedMethly files
+
+```{r}
+
+filter_peaks_by_location <- function(df) {
+  df$Location[is.na(df$Location) | df$Location == "N/A" | df$Location == "null"] <- "Others"
+  
+  list(
+    `5UTR` = df %>% filter(Location == "5'UTR"),
+    `3UTR` = df %>% filter(Location == "3'UTR"),
+    `CDS`  = df %>% filter(Location == "CDS"))
+}
+
+
+filtered_peaks <- lapply(peak_files, filter_peaks_by_location)
+
+```
+
+
+```{r}
+library(gprofiler2)
+
+
+gene_symbols <- filtered_peaks[["W1118_Rep1_Ψ"]][["3UTR"]]$Gene_ID
+
+gost_result = gost(
+  query = gene_symbols,
+  organism = "dmelanogaster",
+  correction_method = "fdr")
+
+
+head(gost_result$result)
+
+
+#gostplot(gost_result, capped = TRUE, interactive = T)
+```
+
+
+```{r}
+library(gprofiler2)
+
+gene_symbols <- filtered_peaks[["W1118_Rep1_Ψ"]][["3UTR"]]$Gene_ID
+
+gost_result <- gost(query = gene_symbols, organism = "dmelanogaster",
+  correction_method = "fdr")
+
+```
+
+# show the terms in dot plot
+```{r}
+go_data <- gost_result$result
+
+# Select a subset to label (e.g., top 10 by p-value)
+label_terms <- go_data$term_name[1:10]
+
+# Plot
+#ggplot(go_data, aes(x = -log10(p_value), y = reorder(term_name, -log10(p_value)))) +
+#  geom_point(aes(size = intersection_size, color = p_value)) +
+#  geom_text(data = subset(go_data, term_name %in% label_terms),
+#    aes(label = term_name),
+#    size = 3, hjust = -0.05) +
+#  scale_color_viridis_c(option = "plasma", direction = -1) +
+#  theme_minimal(base_size = 14) +
+#  labs( title = "GO Enrichment for W1118 Rep1 Ψ - 3'UTR",
+#    x = "-log10(p-value)", y = "GO Term", size = "Gene Count", color = "p-value") +
+#  theme(
+#    axis.text.y = element_blank(),
+#    axis.ticks.y = element_blank(),
+#    legend.position = "right")
+
+```
+
+
+```{r}
+samples <- c("W1118_Rep1_Ψ", "W1118_Rep2_Ψ", "W1118_Rep3_Ψ", "FR113_Rep1_Ψ", "FR113_Rep2_Ψ")
+utr5_genes <- lapply(samples, function(sample) {
+  filtered_peaks[[sample]][["3UTR"]]$Gene_ID
+})
+names(utr5_genes) <- samples
+
+gost_results <- lapply(names(utr5_genes), function(name) {
+  res <- gost(query = utr5_genes[[name]],
+              organism = "dmelanogaster",
+              correction_method = "fdr",
+              sources = "GO:BP")
+  if (!is.null(res)) {
+    res$result$sample <- name
+    return(res$result)
+  } else {
+    return(NULL)
+  }
+})
+
+# Combine all results into one data frame
+gost_all <- do.call(rbind, gost_results)
+
+```
+
+
+```{r}
+# Select top 5 GO terms from each sample or specific terms
+top_terms <- gost_all %>%
+  group_by(sample) %>%
+  slice_min(p_value, n = 20) %>%
+  pull(term_name) %>%
+  unique()
+
+# Filter data
+plot_data <- gost_all %>% filter(term_name %in% top_terms)
+
+```
+
+
+```{r}
+library(ggthemes)
+sample_colors <- setNames(ggthemes::colorblind_pal()(length(samples)), samples)
+
+ggplot(plot_data, aes(x = sample,
+                      y = reorder(term_name, -log10(p_value)),
+                      size = intersection_size,
+                      color = sample)) +
+  geom_point(aes(alpha = -log10(p_value))) +
+  scale_color_manual(values = sample_colors) +
+  scale_alpha_continuous(range = c(0.4, 1)) +
+  theme_minimal(base_size = 14) +
+  labs(title = "GO Biological Process Enrichment (CDS Peaks)",
+       x = "Sample", y = "GO Term",
+       size = "Gene Count", alpha = "-log10(p-value)", color = "Sample") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "right") + theme_classic()
+
+```
+
+### extract chrom start end for heatmap
+```{r}
+
+object_names <- c(
+  "W118_r1_m_filtered", "W118_r1_pseu_filtered",
+  "W118_r2_m_filtered", "W118_r2_pseu_filtered",
+  "W118_r3_m_filtered", "W118_r3_pseu_filtered",  
+  "FR113_rep1_m_filtered", "FR113_rep1_pseu_filtered",
+  "FR113_rep2_m_filtered", "FR113_rep2_pseu_filtered")
+
+
+
+output_dir <- "peak_coords_output"
+dir.create(output_dir, showWarnings = FALSE)
+
+
+#for (name in object_names) {
+#  df <- get(name)
+  
+#  if (all(c("chrom", "start", "end") %in% colnames(df))) {
+#    coords <- df[, c("chrom", "start", "end")]
+    
+    #write.table(coords, file = file.path(output_dir, paste0(name, "_filtered_coords.bed")), sep = "\t", row.names = FALSE, col.names = FALSE, quote = FALSE)
+#  } else {
+#    warning(paste("Missing chrom/start/end in", name))
+#  }
+#}
+
+```
+
+
+
+# Kmer distribution
+```{r}
+library(data.table)
+library(ggplot2)
+
+
+dt1 <- fread("~/Dropbox/all_files/dRNA/bed_files/FR113N_05_11_2025_rep2_ref_kmer_mod_17802.tsv")[, -1, with = FALSE]
+dt1[, dataset := "FR113N Rep1 Ψ"]
+
+dt2 <- fread("~/Dropbox/all_files/dRNA/bed_files/W1118_rep1_ref_kmer_mod_17802.tsv")[, -1, with = FALSE]
+dt2[, dataset := "W1118 Rep1 Ψ"]
+
+dt3 <- fread("~/Dropbox/all_files/dRNA/bed_files/FR113N_05_11_2025_rep3_ref_kmer_mod_17802.tsv")[, -1, with = FALSE]
+dt3[, dataset := "FR113N Rep2 Ψ"]
+
+dt4 <- fread("~/Dropbox/all_files/dRNA/bed_files/W1118_rep2_ref_kmer_mod_17802.tsv")[, -1, with = FALSE]
+dt4[, dataset := "W1118 Rep2 Ψ"]
+
+#dt5 <- fread("~/Dropbox/all_files/dRNA/bed_files/W1118_rep3_ref_kmer_mod_17802.tsv")[, -1, with = FALSE]
+#dt5[, dataset := "W1118 Rep3 Ψ"]
+
+FR1113_all_data <- rbindlist(list(dt1, dt2, dt3, dt4), use.names = TRUE, fill = TRUE)
+
+
+FR1113_all_data <- unique(FR1113_all_data, by = c("read_length", "dataset"))
+
+# Plot read length distribution
+ggplot(FR1113_all_data, aes(x = dataset, y = read_length, fill = dataset)) +
+  geom_violin(trim = FALSE) +
+  geom_boxplot(width = 0.2, notch = TRUE, outlier.shape = NA) +
+  theme_minimal(base_size = 14) +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Read Length Distribution by Dataset",
+    x = "Dataset",
+    y = "Read Length")
+```
+
+# Filter for high-confidence calls
+```{r}
+
+high_conf <- FR1113_all_data[call_prob >= 0.5 & call_code != "-", .(query_kmer, call_code)]
+
+kmer_counts <- high_conf[, .N, by = .(call_code, query_kmer)]
+
+top_kmers <- kmer_counts[order(-N), .SD[1:50], by = call_code]
+
+
+```
+
+# Plot separately for each modification
+```{r}
+
+unique_mods <- unique(top_kmers$call_code)
+
+for (mod in unique_mods) {
+  df_mod <- top_kmers[call_code == mod]
+  
+  p <- ggplot(df_mod, aes(x = reorder(query_kmer, N), y = N, fill = query_kmer)) +
+    geom_bar(stat = "identity", show.legend = FALSE) +
+    coord_flip() +
+    theme_minimal(base_size = 14) +
+    labs(title = paste("Top Query K-mers for", mod, "(call_prob ≥ 0.9)"),
+         x = "Query K-mer", y = "Count") #+ scale_fill_brewer(palette = "Dark2")
+  
+  print(p)
+}
+
+
+
+```
+
+
+
+
+# Differential methylation analysis
+```{r}
+#abs(effect_size) >= 0.1,
+W1118_vs_Mettl3_KO_a_dmr <- read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/w1118_vs_Mettl3KOdmr_a.tsv", header = T, sep = "\t") %>% dplyr::filter(abs(cohen_h) > 0.05, balanced_map_pvalue < 0.05, a_pct_modified > 0, b_pct_modified > 0) %>% dplyr::filter(Location != "Intron", Location != "null", Location != "N/A", Location != "")
+
+W1118_vs_Mettl3_m_dmr <- read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/w1118_vs_Mettl3KOdmr_C.tsv", header = T, sep = "\t") %>% dplyr::filter(abs(cohen_h) > 0.05, balanced_map_pvalue < 0.05, a_pct_modified > 0, b_pct_modified > 0) %>% dplyr::filter(Location != "Intron", Location != "null", Location != "N/A", Location != "")
+
+FR1113_vs_Mettl3_KO_a_dmr <- read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113NOct4Mettl3KOdmr_a.tsv", header = T, sep = "\t") %>% dplyr::filter(abs(cohen_h) > 0.05, balanced_map_pvalue < 0.05, a_pct_modified > 0, b_pct_modified > 0) %>% dplyr::filter(Location != "Intron", Location != "null", Location != "N/A", Location != "")
+
+FR1113_vs_Mettl3_KO_m_dmr <- read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113NOct4Mettl3KOdmr_C.tsv", header = T, sep = "\t") %>% dplyr::filter(abs(cohen_h) > 0.05, balanced_map_pvalue < 0.05, a_pct_modified > 0, b_pct_modified > 0) %>% dplyr::filter(Location != "Intron", Location != "null", Location != "N/A", Location != "")
+
+FR113_vs_w1118_a_dmr <- read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113NOct4_05_11_W1118_Rep2_mRNA_m6_W1118_induro_mRNA_2025_102_dmr_a.tsv", header = T, sep = "\t") %>% dplyr::filter(abs(cohen_h) > 0.05, balanced_map_pvalue < 0.05, a_pct_modified > 0, b_pct_modified > 0) %>% dplyr::filter(Location != "Intron", Location != "null", Location != "N/A", Location != "")
+
+FR113_vs_w1118_m_dmr <- read.delim("~/Dropbox/all_files/dRNA/modkit_pileups/FR113NOct4_05_11_W1118_Rep2_mRNA_m6_W1118_induro_mRNA_2025_102_dmr_C.tsv", header = T, sep = "\t") %>% dplyr::filter(abs(cohen_h) > 0.05, balanced_map_pvalue < 0.05, a_pct_modified > 0, b_pct_modified > 0) %>% dplyr::filter(Location != "Intron", Location != "null", Location != "N/A", Location != "")
+```
+
+Figure 2:
+
+Barplot (p_bar): shows number of DMRs per dataset and modification type. Useful for overall magnitude comparison.
+
+Boxplot (p_box): shows distribution of effect sizes, highlighting variability within datasets.
+
+Scatterplot (p_scatter): plots Cohen's h vs effect size, useful to see whether large effect sizes are also statistically strong.
+
+Histogram (p_hist): shows distribution of effect sizes across all datasets, highlighting bias or spread.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(purrr)
+library(tibble)
+
+list_dmr <- list(
+  `w1118 vs Mettl3-KO m6A` = W1118_vs_Mettl3_KO_a_dmr,
+  `w1118 vs Mettl3-KO m5C` = W1118_vs_Mettl3_m_dmr,
+  `w1118 vs Mettl3-KO psi` = W1118_vs_Mettl3_psi_dmr,
+  `FR1113 vs Mettl3-KO m6A` = FR1113_vs_Mettl3_KO_a_dmr,
+  `FR1113 vs Mettl3-KO m5C` = FR1113_vs_Mettl3_KO_m_dmr,
+  `FR1113 vs Mettl3-KO psi` = FR1113_vs_Mettl3_KO_psi_dmr,
+  `FR113 vs w1118 m6A` = FR113_vs_w1118_a_dmr,
+  `FR113 vs w1118 m5C` = FR113_vs_w1118_m_dmr,
+  `FR113 vs w1118 psi` = FR113_vs_w1118_psi_dmr)
+
+
+dmr_combined <- imap_dfr(list_dmr, ~ {
+  mod <- case_when(
+    str_detect(.y, regex("\\bm6A\\b", ignore_case = TRUE)) ~ "m6A",
+    str_detect(.y, regex("\\bm5C\\b", ignore_case = TRUE)) ~ "m5C",
+    str_detect(.y, regex("psi|Ψ", ignore_case = TRUE)) ~ "psi",
+    TRUE ~ "unknown")
+  .x %>% mutate(Dataset = .y, Modification = mod)
+})
+
+#Count DMRs per dataset & modification
+dmr_counts <- dmr_combined %>%
+  group_by(Dataset, Modification) %>%
+  summarise(DMR_Count = n(), .groups = "drop") %>%
+  # order bars by total DMRs (optional)
+  group_by(Dataset) %>%
+  mutate(Total = sum(DMR_Count)) %>%
+  ungroup() %>%
+  mutate(Dataset = fct_reorder(Dataset, Total)) %>%
+  arrange(Dataset)
+
+# Lollipop plot (grouped by modification)
+colors <- c("m6A" = "#95CC5E", "m5C" = "#748AA6", "psi" = "#EAB8D1")
+
+pd <- position_dodge(width = 0.7)
+
+p_lollipop_single <- ggplot(dmr_counts, aes(x = Dataset)) +
+  geom_linerange(aes(ymin = 0, ymax = DMR_Count, color = Modification), position = pd, linewidth = 0.9, alpha = 0.9) +
+  geom_point(aes(y = DMR_Count, fill = Modification, color = Modification), shape = 21, stroke = 1.2, size = 5, position = pd) +
+  geom_text(aes(y = DMR_Count, label = DMR_Count), position = pd, vjust = -1.0, size = 3.8) +
+  scale_color_manual(values = colors) +
+  scale_fill_manual(values = colors) +
+  labs(title = "Number of differentially modified sites", x = NULL, y = "DMR count", color = "Modification", fill = "Modification") +
+  theme_classic(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.text.y = element_text(size = 10), plot.title = element_text(face = "bold", hjust = 0.5)) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+p_lollipop_single
+
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(forcats)
+library(scales)
+library(gridExtra)
+
+# --- 1) Function to normalize regions ---
+normalize_region <- function(x) {
+  y <- tolower(trimws(x))
+  y <- gsub("[ _-]", "", y)
+  dplyr::case_when(
+    str_detect(y, "^(5'utr|utr5'|5utr|utr5|fiveprimeutr|fiveprime)$") ~ "5'UTR",
+    str_detect(y, "^(cds|codingsequence|cdsregion)$") ~ "CDS",
+    str_detect(y, "^(3'utr|utr3'|3utr|utr3|threeprimeutr|threeprime)$") ~ "3'UTR",
+    TRUE ~ NA_character_)
+}
+
+# --- 2) Combine DMR datasets ---
+list_dmr <- list(
+  W1118_vs_Mettl3_KO_a_dmr,
+  W1118_vs_Mettl3_m_dmr,
+  FR1113_vs_Mettl3_KO_a_dmr,
+  FR1113_vs_Mettl3_KO_m_dmr,
+  FR113_vs_w1118_a_dmr,
+  FR113_vs_w1118_m_dmr)
+
+names(list_dmr) <- c(
+  "w1118 vs Mettl3-KO m6A", "w1118 vs Mettl3 m5C",
+  "FR1113 vs Mettl3-KO m6A", "FR1113 vs Mettl3-KO m5C",
+  "FR113 vs w1118 m6A", "FR113 vs W1118 m5C")
+
+# Add dataset & modification type
+dmr_combined <- bind_rows(lapply(names(list_dmr), function(n) {
+  df <- list_dmr[[n]]
+  mod <- ifelse(grepl("_a_", n), "m6A", "m5C")
+  df %>% mutate(Dataset = n, Modification = mod)
+}))
+
+
+dmr_combined <- dmr_combined %>%
+  mutate(Region = normalize_region(Location)) %>%
+  dplyr::filter(!is.na(Region))
+
+# --- 4) Calculate percent DMRs per region per dataset ---
+region_counts <- dmr_combined %>%
+  group_by(Dataset, Modification, Region) %>%
+  summarise(Count = n(), .groups = "drop")
+
+totals <- region_counts %>%
+  group_by(Dataset, Modification) %>%
+  summarise(Total = sum(Count), .groups = "drop")
+
+region_pct <- region_counts %>%
+  left_join(totals, by = c("Dataset", "Modification")) %>%
+  mutate(percent = Count / Total)
+
+# --- 5) Barplot: percent of DMRs per region ---
+region_colors <- c("5'UTR" = "#268BD2", "CDS" = "#DC322F", "3'UTR" = "#2AA198")
+
+p_region_bar <- ggplot(region_pct, aes(x = Dataset, y = percent, fill = Region)) +
+  geom_col(position = "stack", color = "black") +
+  facet_wrap(~ Modification, nrow = 1) +
+  scale_fill_manual(values = region_colors) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(title = "Percent of DMRs in 5'UTR, CDS, 3'UTR by dataset and modification",
+       x = "Dataset", y = "Percent of DMRs") +
+  theme_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# --- 6) Boxplot: effect size by region ---
+dmr_combined$Region <- factor(dmr_combined$Region, levels = c("5'UTR", "CDS", "3'UTR"))
+p_region_box <- ggplot(dmr_combined, aes(x = Region, y = effect_size, fill = Region)) +
+  geom_boxplot(outlier.shape = NA, notch = T) + 
+#geom_violin(trim = FALSE, alpha = 0.9) +
+  #geom_jitter(aes(color = Region), width = 0.2, alpha = 0.5, size = 1.5) +
+   #geom_jitter(color = "black", width = 0.05, alpha = 0.05, size = 1.5) +
+  facet_wrap(~ Modification + Dataset, scales = "free") +
+  scale_fill_manual(values = region_colors) +
+  scale_color_manual(values = region_colors) +
+  labs(title = "Effect size distribution by region", x = "Region", y = "Effect size") +
+  theme_classic(base_size = 12) +
+  theme(axis.text.x = element_text(size = 10))
+
+# --- Display plots ---
+grid.arrange(p_region_bar, nrow = 1)
+print(p_region_box)
+
+```
+
+
+
+
+
+
+1) “Rescue/concordance” quadrant plot (per-site)
+
+Story: does FR113N restore the KO losses seen in W1118 vs KO (for m⁶A at A, or m⁵C at C)?
+
+X = Δ(W1118 − KO)
+
+Y = Δ(FR113N − KO)
+
+Quadrants:
+
+Q1 (x>0, y>0): sites high in both W1118 and FR113N vs KO ⇒ KO-loss and FR113N rescue
+
+Q2 (x<0, y>0): FR113N-specific gains not present in W1118
+
+Q3 (x<0, y<0): KO > both (unexpected, check)
+
+Q4 (x>0, y<0): W1118-specific sites not rescued
+
+```{r}
+
+wt_ko_A  <- W1118_vs_Mettl3_KO_a_dmr  %>% 
+  mutate(FDR=p.adjust(balanced_map_pvalue,"BH")) %>%
+  filter(FDR<0.05, abs(effect_size)>=0.1) %>%
+  transmute(key=paste(X.chrom,start,end,strand,sep=":"),
+            es_wtko = effect_size, Location, Gene_ID)
+
+fr_ko_A  <- FR1113_vs_Mettl3_KO_a_dmr %>%
+  mutate(FDR=p.adjust(balanced_map_pvalue,"BH")) %>%
+  filter(FDR<0.05, abs(effect_size)>=0.1) %>%
+  transmute(key=paste(X.chrom,start,end,strand,sep=":"),
+            es_frko = effect_size)
+
+xy_A <- wt_ko_A %>% inner_join(fr_ko_A, by="key")
+
+resWF <- ggplot(xy_A, aes(x=es_wtko, y=es_frko, color=Location)) +
+  geom_hline(yintercept=0, linetype="dashed") +
+  geom_vline(xintercept=0, linetype="dashed") +
+  geom_point(alpha=0.9, size=3) +
+  coord_equal() +
+  scale_fill_manual(values = region_colors) +
+  scale_color_manual(values = region_colors) +
+  labs(x="Δ mod fraction: w1118 − KO (A-base)",
+       y="Δ mod fraction: FR113N − KO (A-base)",
+       title="Rescue/concordance of A-base DMRs") +
+  theme_classic()
+
+resWF
+
+```
+
+
+
+```{r}
+
+# Filtered, significant sets (A-base example)
+wt_ko_A  <- W1118_vs_Mettl3_m_dmr  %>% 
+  mutate(FDR=p.adjust(balanced_map_pvalue,"BH")) %>%
+  filter(FDR<0.05, abs(effect_size)>=0.1) %>%
+  transmute(key=paste(X.chrom,start,end,strand,sep=":"),
+            es_wtko = effect_size, Location, Gene_ID)
+
+fr_ko_A  <- FR1113_vs_Mettl3_KO_m_dmr %>%
+  mutate(FDR=p.adjust(balanced_map_pvalue,"BH")) %>%
+  filter(FDR<0.05, abs(effect_size)>=0.1) %>%
+  transmute(key=paste(X.chrom,start,end,strand,sep=":"),
+            es_frko = effect_size)
+
+xy_A <- wt_ko_A %>% inner_join(fr_ko_A, by="key")
+
+resWFC <- ggplot(xy_A, aes(x=es_wtko, y=es_frko, color=Location)) +
+  geom_hline(yintercept=0, linetype="dashed") +
+  geom_vline(xintercept=0, linetype="dashed") +
+  geom_point(alpha=0.9, size=3) +
+  coord_equal() +
+  scale_fill_manual(values = region_colors) +
+  scale_color_manual(values = region_colors) +
+  labs(x="Δ mod fraction: w1118 − KO (m-base)", y="Δ mod fraction: FR113N − KO (m-base)",
+       title="Rescue/concordance of m5C DMRs") +
+  theme_classic()
+
+resWFC
+```
+
+Gene-level “waterfall” (ranked) for direction & magnitude
+
+Story: which genes have the strongest net changes, and are they gains or losses? Aggregate site-level effects to gene-level (e.g., median Δ).
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(forcats)
+library(tidyr)
+library(tidytext)
+
+# summarize one DMR table to gene level --------
+summarize_gene <- function(df, contrast_label, base_label, fdr_cut = 0.05, min_abs_es = 0.0) {
+  df %>%
+    mutate(FDR = p.adjust(balanced_map_pvalue, method = "BH")) %>%
+    filter(!is.na(Gene_ID), FDR < fdr_cut, abs(effect_size) >= min_abs_es) %>%
+    group_by(Gene_ID) %>%
+    summarise(n_sites = n(), median_es = median(effect_size, na.rm = TRUE), top_loc = names(sort(table(Location), decreasing = TRUE))[1], 
+              .groups = "drop") %>%
+    mutate(contrast = contrast_label, base = base_label)
+}
+
+gene_all <- bind_rows(
+  summarize_gene(W1118_vs_Mettl3_KO_a_dmr, "w1118 vs Mettl3-KO", "m6A"),
+  summarize_gene(W1118_vs_Mettl3_m_dmr, "w1118 vs Mettl3-KO", "m5C"),
+  summarize_gene(FR1113_vs_Mettl3_KO_a_dmr, "FR113N vs Mettl3-KO", "m6A"),
+  summarize_gene(FR1113_vs_Mettl3_KO_m_dmr, "FR113N vs Mettl3-KO", "m5C"),
+  summarize_gene(FR113_vs_w1118_a_dmr, "FR113N vs w1118", "m6A"),
+  summarize_gene(FR113_vs_w1118_m_dmr, "FR113N vs w1118", "m5C")) %>%
+  mutate(contrast = factor(contrast, levels = c("w1118 vs Mettl3-KO","FR113N vs Mettl3-KO","FR113N vs w1118")),
+    base = factor(base, levels = c("m6A","m5C")),
+    direction = ifelse(median_es >= 0, "Higher in A", "Higher in B"))
+
+# pick top genes per facet by |median_es| --------
+topN <- 10
+plot_df <- gene_all %>%
+  group_by(contrast, base) %>%
+  slice_max(order_by = abs(median_es), n = topN, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(Gene_ID_fac = tidytext::reorder_within(Gene_ID, median_es, interaction(contrast, base)))
+
+
+col_dir <- c("Higher in A" = "#1b9e77",   # A group higher (left side of label)
+             "Higher in B" = "#d95f02")   # B group higher
+
+
+topdiff <- ggplot(plot_df,aes(x = Gene_ID_fac, y = median_es, color = direction)) +
+  geom_segment(aes(xend = Gene_ID_fac, y = 0, yend = median_es), linewidth = 0.6, alpha = 0.8, color = "black") +
+  geom_point(aes(size = n_sites), stroke = 1.2, alpha = 0.95, size = 3) +
+  scale_color_manual(values = col_dir, name = "Direction") +
+  scale_size_continuous(name = "# sites", range = c(1.2, 4.0)) +
+  geom_hline(yintercept = 0, linewidth = 0.3) +
+  coord_flip() +
+  facet_grid(base ~ contrast, scales = "free_y", space = "free_y") +
+  tidytext::scale_x_reordered() +
+  labs(x = NULL, y = expression("Median " * Delta * " modified fraction (A − B) per gene"), title = "Top genes by net change across contrasts and base types", subtitle = "Points sized by # significant sites; color indicates which group has higher modification (A vs B)", vjust = -1.2, size = 6, fontface = "bold", family = "Times New Roman") +
+  theme_classic(base_size = 11) +
+  theme(legend.position = "right", strip.background = element_blank(), strip.text = element_text(face = "bold"), panel.grid = element_blank()) +
+  theme_classic(base_size = 11) +
+  theme(legend.position = "right", panel.spacing.x = unit(8, "pt"), strip.background = element_blank(), strip.text = element_text(face = "bold")) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x = element_text(hjust = 1),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+
+topdiff
+```
+
+
+MA-style plot (precision vs effect)
+
+What it shows: small Δ at very high coverage can be significant; this helps reviewers see you’re not chasing low-depth artifacts.
+```{r}
+library(dplyr)
+library(ggplot2)
+library(forcats)
+library(purrr)
+
+# helper to prep one table ----------
+prep_dmr <- function(df, contrast_label, base_type, fdr_cut=0.05, min_abs_es=0.1) {
+  df %>%
+    mutate(FDR = p.adjust(balanced_map_pvalue, method = "BH"),
+      min_cov = pmin(a_total, b_total),
+      sig = FDR < fdr_cut & abs(effect_size) >= min_abs_es) %>%
+    transmute(contrast = contrast_label, base = base_type, min_cov = min_cov, effect_size = effect_size, FDR = FDR, sig = sig, Location = Location, Gene_ID = Gene_ID)
+}
+
+all_qc <- bind_rows(
+  prep_dmr(W1118_vs_Mettl3_KO_a_dmr, "w1118 vs Mettl3-KO", "m6A"),
+  prep_dmr(FR1113_vs_Mettl3_KO_a_dmr, "FR113N vs Mettl3-KO", "m6A"),
+  prep_dmr(FR113_vs_w1118_a_dmr, "FR113N vs w1118", "m6A")) %>%
+  mutate(
+    contrast = factor(contrast, levels = c("w1118 vs Mettl3-KO", "FR113N vs Mettl3-KO", "FR113N vs w1118")))
+
+
+shape_vals <- c(m6A = 16, m5C = 17)  # 16 = filled circle, 17 = filled triangle
+color_vals <- c("w1118 vs Mettl3-KO"="#1b9e77", "FR113N vs Mettl3-KO"="#d95f02", "FR113N vs w1118"="#7570b3")
+
+ggplot(all_qc, aes(x = log10(min_cov + 1), y = effect_size)) +
+  geom_hline(yintercept = 0, linetype = "solid", linewidth = 0.25) +
+  geom_hline(yintercept = c(-0.1, 0.1), linetype = "dashed", linewidth = 0.25) +
+  geom_point(aes(color = contrast, shape = base, alpha = sig), size = 3, stroke = 1.2) +
+  scale_alpha_manual(values = c(`TRUE`=1, `FALSE`=0.25), guide = "none") +
+  scale_shape_manual(values = shape_vals, name = "Base") +
+  scale_color_manual(values = color_vals, name = "Contrast") +
+  coord_cartesian(ylim = c(-1, 1)) +
+  facet_wrap(~ contrast, nrow = 1) +
+  labs(x = "log10(min group coverage + 1)", y = expression(paste(Delta, " modified fraction (A - B)")), title = "Effect size vs coverage across all contrasts", vjust = -1.2, size = 6, fontface = "bold", family = "Times New Roman") +
+  theme_classic(base_size = 11) +
+  theme(legend.position = "right", panel.spacing.x = unit(8, "pt"), strip.background = element_blank(), strip.text = element_text(face = "bold")) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x = element_text(hjust = 1),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(forcats)
+library(purrr)
+
+prep_dmr <- function(df, contrast_label, base_type, fdr_cut=0.05, min_abs_es=0.1) {
+  df %>%
+    mutate(FDR = p.adjust(balanced_map_pvalue, method = "BH"), min_cov = pmin(a_total, b_total), sig = FDR < fdr_cut & abs(effect_size) >= min_abs_es) %>%
+    transmute(contrast = contrast_label, base = base_type, min_cov = min_cov, effect_size = effect_size, FDR = FDR, sig = sig, Location = Location, Gene_ID = Gene_ID)
+}
+
+# bind all six datasets
+all_qc <- bind_rows(
+  prep_dmr(W1118_vs_Mettl3_m_dmr, "w1118 vs Mettl3-KO", "m5C"),
+  prep_dmr(FR1113_vs_Mettl3_KO_m_dmr, "FR113N vs Mettl3-KO", "m5C"),
+  prep_dmr(FR113_vs_w1118_m_dmr, "FR113N vs w1118", "m5C")) %>%
+  mutate(contrast = factor(contrast, levels = c("w1118 vs Mettl3-KO", "FR113N vs Mettl3-KO", "FR113N vs w1118")))
+
+shape_vals <- c(m6A = 16, m5C = 17)  # 16 = filled circle, 17 = filled triangle
+color_vals <- c("w1118 vs Mettl3-KO"="#1b9e77", "FR113N vs Mettl3-KO"="#d95f02", "FR113N vs w1118"="#7570b3")
+
+ggplot(all_qc, aes(x = log10(min_cov + 1), y = effect_size)) +
+  geom_hline(yintercept = 0, linetype = "solid", linewidth = 0.25) +
+  geom_hline(yintercept = c(-0.1, 0.1), linetype = "dashed", linewidth = 0.25) +
+  geom_point(aes(color = contrast, shape = base, alpha = sig), size = 3, stroke = 1.2) +
+  scale_alpha_manual(values = c(`TRUE`=1, `FALSE`=0.25), guide = "none") +
+  scale_shape_manual(values = shape_vals, name = "Base") +
+  scale_color_manual(values = color_vals, name = "Contrast") +
+  coord_cartesian(ylim = c(-1, 1)) +
+  facet_wrap(~ contrast, nrow = 1) +
+  labs(x = "log10(min group coverage + 1)", y = expression(paste(Delta, " modified fraction (A - B)")), title = "Effect size vs coverage across all contrasts", vjust = -1.2, size = 6, fontface = "bold", family = "Times New Roman") +
+  theme_classic(base_size = 11) +
+  theme(legend.position = "right", panel.spacing.x = unit(8, "pt"), strip.background = element_blank(), strip.text = element_text(face = "bold")) +
+  theme_classic(base_size = 12, base_family = "Times New Roman") +
+  theme(axis.text.x = element_text(hjust = 1),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    legend.position = "right",
+    legend.text = element_text(size = 12, family = "Times New Roman"))
+
+```
+
+
+# Patch work Figure 2
+```{r}
+library(patchwork)
+library(forcats)
+# (topdiff)
+Figure2 <- topdiff + (p_lollipop_single | p_region_box) / (resWF | resWFC) +
+  plot_annotation(title = " ", theme = theme(plot.title = element_text(size = 12, family = "Times New Roman")), tag_levels = 'A') &
+  theme(text = element_text(size = 12),  axis.title = element_text(size = 12), axis.text = element_text(size = 12), strip.text = element_text(size = 12), legend.text = element_text(size = 12), legend.title = element_text(size = 12))
+
+
+```
+
+
+```{r}
+
+sig_gene_set <- function(df, fdr_cut = 0.05, min_abs_es = 0.1, min_cov = 20) {
+  df %>%
+    mutate(FDR = p.adjust(balanced_map_pvalue, "BH"),
+           min_cov = pmin(a_total, b_total)) %>%
+    filter(!is.na(Gene_ID), FDR < fdr_cut, abs(effect_size) >= min_abs_es, min_cov >= min_cov) %>%
+    distinct(Gene_ID, .keep_all = TRUE)
+}
+
+
+# m6A (A-base) -----
+A_WT_KO <- sig_gene_set(W1118_vs_Mettl3_KO_a_dmr)
+A_FR_KO <- sig_gene_set(FR1113_vs_Mettl3_KO_a_dmr)
+A_FR_WT <- sig_gene_set(FR113_vs_w1118_a_dmr)
+
+sets_A <- list(`W1118 vs KO`= A_WT_KO$Gene_ID, `FR113N vs KO` = A_FR_KO$Gene_ID, `FR113N vs W1118` = A_FR_WT$Gene_ID)
+
+sharem6A <- ggvenn(sets_A, fill_color = c("#1b9e77", "#d95f02", "#7570b3"), stroke_size = 0.6, set_name_size = 4, text_size = 4, show_percentage = FALSE)
+# ggsave("venn_m6A_genes.pdf", width = 5, height = 5, useDingbats = FALSE)
+
+# ----- m5C (C-base) -----
+C_WT_KO <- sig_gene_set(W1118_vs_Mettl3_m_dmr)
+C_FR_KO <- sig_gene_set(FR1113_vs_Mettl3_KO_m_dmr)
+C_FR_WT <- sig_gene_set(FR113_vs_w1118_m_dmr)
+
+sets_C <- list(`W1118 vs KO` = C_WT_KO$Gene_ID, `FR113N vs KO` = C_FR_KO$Gene_ID, `FR113N vs W1118` = C_FR_WT$Gene_ID)
+
+sharem5C <- ggvenn(sets_C, fill_color = c("#1b9e77", "#d95f02", "#7570b3"), stroke_size = 0.6, set_name_size = 4, text_size = 4, show_percentage = FALSE)
+
+
+```
+
+
+# Patch work Figure 2
+```{r}
+library(patchwork)
+library(forcats)
+# (topdiff)
+Figure2 <- ((p_lollipop_single | p_region_box) / (sharem6A | sharem5C) | topdiff) +
+  plot_annotation(title = " ", theme = theme(plot.title = element_text(size = 12, family = "Times New Roman")), tag_levels = 'A') &
+  theme(text = element_text(size = 12),  axis.title = element_text(size = 12), axis.text = element_text(size = 12), strip.text = element_text(size = 12), legend.text = element_text(size = 12), legend.title = element_text(size = 12))
+
+Figure2
+```
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
